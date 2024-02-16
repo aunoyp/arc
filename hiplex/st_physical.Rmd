@@ -1,0 +1,829 @@
+---
+title: "st_physical"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+July 9th, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+library(png)
+library(cowplot)
+library(magick)
+
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+meta_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/overlay'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_408 = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  if(grepl('164', file_name)){
+    next
+  }
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  
+  ## Add relative_XY_position
+  
+  if(!is_empty(df_408)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df_408))
+  }
+  df_408 <- rbind(df_408, df_to_append)
+}
+```
+```{r}
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='_Cluster', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='X', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='L2_', replacement='L2-'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='-L2', replacement='_L2'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='Tc_12', replacement='TC_12'))
+## Missing
+df_408 = df_408[df_408$IMAGE.NAME != 'Layer1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_18', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_19', ]
+#df_408$IMAGE.NAME = toupper(df_408$IMAGE.NAME)
+unique(df_408$IMAGE.NAME)
+```
+## Now we know that everything is equal to one another, we should load the variable
+
+```{r}
+image_names = unique(df_408$IMAGE.NAME)
+# Preset these variables to negative values so I can easily check if they were updated later
+df_408$X = -1
+df_408$Y = -1
+# set some normalization variables
+## This is the size of the image when the pixel values are taken from top left down
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 20
+
+# Load the dataframe with global and relative coordinates
+img_cords = read.table(file.path(meta_dir, '408_pixel_coordinates.csv'), sep = ',', header = TRUE)
+
+images = list.files(meta_dir)
+for(image_name in image_names){
+      if(grepl('164', image_name)){
+      next
+    }
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('408', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+    if(cortex == 'CC'){ 
+      #print(paste('cc', filename, image_name))
+      x_adj = 0
+      y_adj = 0
+    } else if(as.numeric(number) <= 10){
+      #print(paste('tc<11', filename, image_name))
+      x_adj = 180#img_cords[img_cords$Name == 'G_TC_1', 'x']
+      y_adj = 210 #img_cords[img_cords$Name == 'G_TC_1', 'y']
+    }else{
+      #print(paste('tc>=11', filename, image_name))
+      x_adj = 380#img_cords[img_cords$Name == 'G_TC_11', 'x']
+      y_adj = 410 #img_cords[img_cords$Name == 'G_TC_11', 'y']
+    }
+    
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_408[df_408$IMAGE.NAME == image_name, 'X'] = (x_repelled / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + 
+                                                    img_cords[img_cords$Name == image_name, 'x'] + x_adj
+    df_408[df_408$IMAGE.NAME == image_name, 'Y'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + 
+                                                    img_cords[img_cords$Name == image_name, 'y'] + y_adj    
+}
+```
+
+## We have the coordinates for 408_TC and others
+```{r}
+jy_408 = df_408 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X, Y)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
+normed = GetAssayData(jy_408, slot = 'data')
+normed[normed < 3] = 0
+jy_408 <- SetAssayData(jy_408, slot = 'data', normed)
+```
+
+```{r}
+xycords = df_408 %>% select(c('X', 'Y')) %>% as.matrix()
+colnames(xycords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["XY"]] <- CreateDimReducObject(embeddings = xycords, key = "pixel_", assay = DefaultAssay(jy_408))
+```
+
+```{r}
+jy_408$gad1_true = normed['GAD1',] != 0 & normed['SATB2',] == 0
+```
+
+```{r}
+nkx21 <- normed['NKX2.1',] != 0 & normed['LHX6',] == 0 & jy_408$gad1_true 
+lhx6 <- normed['NKX2.1',] == 0 & normed['LHX6',] != 0 & jy_408$gad1_true 
+mge_both <- normed['NKX2.1',] != 0 & normed['LHX6',] != 0 & jy_408$gad1_true 
+mge_neither <- normed['NKX2.1',] == 0 & normed['LHX6',] == 0 & jy_408$gad1_true 
+non_interneuron <- !jy_408$gad1_true 
+
+jy_408$mge_lineage = 'error'
+jy_408$mge_lineage[nkx21] = 'NKX2.1'
+jy_408$mge_lineage[lhx6] = 'LHX6'
+jy_408$mge_lineage[mge_both] = 'NKX2.1 & LHX6'
+jy_408$mge_lineage[mge_neither] = 'Non-MGE'
+jy_408$mge_lineage[non_interneuron] = 'Non-IN'
+```
+
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        cols = c('grey', 'purple'), reduction = "XY", pt.size = 0.2, group.by = 'gad1_true', order = which(jy_408$gad1_true))
+```
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 0.1, split.by = 'mge_lineage', 
+        cells.highlight = list(nkx2.1 = which(nkx21), lhx6 = which(lhx6), both = which(mge_both)),
+        cols.highlight = c('orange1','hotpink1', 'black'), 
+        order = which(jy_408$gad1_true)) + scale_y_reverse() + scale_x_reverse() + NoAxes()
+```
+
+
+```{r}
+sp8 <- normed['SP8',] != 0 & normed['COUPTF2',] == 0 & jy_408$gad1_true 
+couptf2 <- normed['SP8',] == 0 & normed['COUPTF2',] != 0 & jy_408$gad1_true 
+cge_lge <- normed['SP8',] != 0 & normed['COUPTF2',] != 0 & jy_408$gad1_true 
+neither_cge_lge <- normed['SP8',] == 0 & normed['COUPTF2',] == 0 & jy_408$gad1_true 
+non_interneuron <- !jy_408$gad1_true 
+
+jy_408$cge_lineage = 'error'
+jy_408$cge_lineage[sp8] = 'SP8'
+jy_408$cge_lineage[couptf2] = 'COUPTF2'
+jy_408$cge_lineage[cge_lge] = 'SP8 & COUPTF2'
+jy_408$cge_lineage[neither_cge_lge] = 'Non-CGE/LGE'
+jy_408$cge_lineage[non_interneuron] = 'Non-IN'
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, split.by = 'cge_lineage', 
+        cells.highlight = list(sp8 = which(sp8), couptf2 = which(couptf2), both = which(cge_lge)),
+        cols.highlight = c('red','blue', 'purple'), 
+        order = which(jy_408$gad1_true)) + scale_y_reverse() + scale_x_reverse() + NoAxes()
+```
+
+```{r}
+jy_408 <- FindVariableFeatures(jy_408, selection.method = "vst")
+all.genes <- rownames(jy_408)
+jy_408 <- ScaleData(jy_408, features = all.genes)
+jy_408 <- RunPCA(jy_408, approx = FALSE)
+jy_408 <- FindNeighbors(jy_408, dims = 1:30)
+jy_408 <- FindClusters(jy_408, resolution = 0.8)
+jy_408 <- RunUMAP(jy_408, dims = 1:30)
+
+DimPlot(jy_408, cols = c('greenyellow', 'lightgoldenrodyellow', 'orange1', 'aquamarine4', 'tomato', 'dodgerblue3', 'violetred3'), reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('greenyellow', 'lightgoldenrodyellow', 'orange1', 'aquamarine4', 'tomato', 'dodgerblue3', 'violetred3'), 
+        cols = c('greenyellow', 'lightgoldenrodyellow', 'aquamarine4', 'orange1', 'dodgerblue3', 'tomato', 'violetred3'), 
+        reduction = "XY", order = c(6, 4, 3, 2, 0, 1, 5), pt.size = 1) + scale_y_reverse() + scale_x_reverse() #group.by = 'mge_lineage', 
+        #cells.highlight = list(sp8 = which(sp8), couptf2 = which(couptf2), both = which(cge_lge)),
+        #cols.highlight = c('red','blue', 'purple'), 
+        #order = which(jy_408$gad1_true)) + scale_y_reverse() + scale_x_reverse()
+```
+
+```{r}
+cluster_by_loc = as.data.frame(as.matrix(cbind(rownames(df_408), jy_408$seurat_clusters, df_408$X, df_408$Y)))
+colnames(cluster_by_loc) = c('cellnum', 'cluster', 'X', 'Y')
+```
+
+```{r}
+cluster_by_loc %>%
+  #filter(cluster == 3) %>%
+  ggplot(aes(x = X, color = cluster)) + geom_histogram(position = 'identity', bins = 50, binwidth = 1000, stat = 'count')
+```
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, #group.by = 'mge_lineage', 
+        cells.highlight = list(cluster0 = which(jy_408$seurat_clusters == 0))) + scale_y_reverse() + scale_x_reverse()#,
+        #cols.highlight = c('red','blue', 'purple'), 
+        #order = which(jy_408$gad1_true)) + scale_y_reverse() + scale_x_reverse()
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, #group.by = 'mge_lineage', 
+        cells.highlight = list(cluster1 = which(jy_408$seurat_clusters == 1))) + scale_y_reverse() + scale_x_reverse()#,
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, #group.by = 'mge_lineage', 
+        cells.highlight = list(cluster2 = which(jy_408$seurat_clusters == 2))) + scale_y_reverse() + scale_x_reverse()#,
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, #group.by = 'mge_lineage', 
+        cells.highlight = list(cluster3 = which(jy_408$seurat_clusters == 3))) + scale_y_reverse() + scale_x_reverse()#,
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, #group.by = 'mge_lineage', 
+        cells.highlight = list(cluster4 = which(jy_408$seurat_clusters == 4))) + scale_y_reverse() + scale_x_reverse()#,
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, #group.by = 'mge_lineage', 
+        cells.highlight = list(cluster5 = which(jy_408$seurat_clusters == 5))) + scale_y_reverse() + scale_x_reverse()#,
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1, #group.by = 'mge_lineage', 
+        cells.highlight = list(cluster6 = which(jy_408$seurat_clusters == 6))) + scale_y_reverse() + scale_x_reverse()#,
+```
+
+```{r}
+bruh <- FeaturePlot(jy_408, features = c('NKX2.1', 'LHX6'),
+        reduction = "XY", pt.size = 1, order = TRUE, split.by = 'area', by.col = TRUE) #+ scale_y_reverse() + scale_x_reverse() + NoAxes() + NoLegend()
+```
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        cols = c('greenyellow', 'lightgoldenrodyellow', 'orange1', 'aquamarine4', 'tomato', 'dodgerblue3', 'violetred3'),
+        reduction = "XY", pt.size = 1, split.by = 'seurat_clusters') + scale_y_reverse() + scale_x_reverse() + NoAxes() + NoLegend()
+```
+```{r}
+jy_408.markers <- FindAllMarkers(jy_408, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_408.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## SATB2 neurons removed
+
+```{r}
+jy_408_IN <- jy_408[, jy_408$gad1_true]
+jy_408_IN <- FindVariableFeatures(jy_408_IN, selection.method = "vst")
+all.genes <- rownames(jy_408_IN)
+jy_408_IN <- ScaleData(jy_408_IN, features = all.genes)
+jy_408_IN <- RunPCA(jy_408_IN, approx = FALSE)
+jy_408_IN <- FindNeighbors(jy_408_IN, dims = 1:30)
+jy_408_IN <- FindClusters(jy_408_IN, resolution = 0.8)
+jy_408_IN <- RunUMAP(jy_408_IN, dims = 1:30)
+
+DimPlot(jy_408_IN, reduction = "umap", group.by = 'seurat_clusters')
+```
+```{r}
+jy_408_IN[["XY"]] <- CreateDimReducObject(embeddings = xycords[jy_408$gad1_true, ], key = "pixel_", assay = DefaultAssay(jy_408_IN))
+```
+
+```{r}
+DimPlot(jy_408_IN, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1) + scale_y_reverse() + scale_x_reverse() 
+```
+```{r}
+jy_408_IN.markers <- FindAllMarkers(jy_408_IN, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_408_IN.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## No SATB2 neurons removed
+
+```{r}
+jy_408_IN <- jy_408[, jy_408$gad1_true]
+jy_408_IN <- FindVariableFeatures(jy_408_IN, selection.method = "vst")
+all.genes <- rownames(jy_408_IN)
+jy_408_IN <- ScaleData(jy_408_IN, features = all.genes)
+jy_408_IN <- RunPCA(jy_408_IN, approx = FALSE)
+jy_408_IN <- FindNeighbors(jy_408_IN, dims = 1:30)
+jy_408_IN <- FindClusters(jy_408_IN, resolution = 0.8)
+jy_408_IN <- RunUMAP(jy_408_IN, dims = 1:30)
+
+DimPlot(jy_408_IN, reduction = "umap", group.by = 'seurat_clusters')
+```
+```{r}
+jy_408_IN[["XY"]] <- CreateDimReducObject(embeddings = xycords[jy_408$gad1_true, ], key = "pixel_", assay = DefaultAssay(jy_408_IN))
+```
+
+```{r}
+DimPlot(jy_408_IN, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 1) + scale_y_reverse() + scale_x_reverse() 
+```
+
+
+
+```{r}
+jy_408_IN.markers <- FindAllMarkers(jy_408_IN, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_408_IN.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+
+## Adjust to get the right overlay
+
+```{r}
+image_names = unique(df_408$IMAGE.NAME)
+# Preset these variables to negative values so I can easily check if they were updated later
+df_408$X = -1
+df_408$Y = -1
+# set some normalization variables
+## This is the size of the image when the pixel values are taken from top left down
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 20
+
+# Load the dataframe with global and relative coordinates
+img_cords = read.table(file.path(meta_dir, '408_pixel_coordinates.csv'), sep = ',', header = TRUE)
+
+images = list.files(meta_dir)
+for(image_name in image_names){
+    if(grepl('164', image_name)){
+      next
+    }
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+    if(cortex == 'CC'){ 
+      #print(paste('cc', filename, image_name))
+      x_adj = 20
+      y_adj = 188
+    } else if(as.numeric(number) <= 10){
+      #print(paste('tc<11', filename, image_name))
+      x_adj = 410#img_cords[img_cords$Name == 'G_TC_1', 'x']
+      y_adj = 470 #img_cords[img_cords$Name == 'G_TC_1', 'y']
+    }else{
+      #print(paste('tc>=11', filename, image_name))
+      x_adj = 590#img_cords[img_cords$Name == 'G_TC_11', 'x']
+      y_adj = 790 #img_cords[img_cords$Name == 'G_TC_11', 'y']
+    }
+    
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_408[df_408$IMAGE.NAME == image_name, 'X'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + 
+                                                    img_cords[img_cords$Name == image_name, 'x']/1.5 + x_adj
+    df_408[df_408$IMAGE.NAME == image_name, 'Y'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + 
+                                                    img_cords[img_cords$Name == image_name, 'y'] + y_adj    
+}
+
+xycords = df_408 %>% select(c('X', 'Y')) %>% as.matrix()
+colnames(xycords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["XY"]] <- CreateDimReducObject(embeddings = xycords, key = "pixel_", assay = DefaultAssay(jy_408))
+```
+
+
+```{r}
+#https://stackoverflow.com/questions/9917049/inserting-an-image-to-ggplot2
+
+theme_set(theme_cowplot())
+
+bad_colors <- DimPlot(jy_408, cols = c('greenyellow', 'lightgoldenrodyellow', 'aquamarine4', 'orange1', 'dodgerblue3', 'tomato', 'violetred3'),  reduction = "XY", pt.size = 0.01, order = c(6, 4, 3, 2, 0, 1, 5)) + scale_y_reverse() + scale_x_reverse() + xlim(852, 0) + ylim(1242, 0) + NoLegend() + coord_fixed() + NoAxes()
+
+#xorig = -852
+#yorig = -1242
+
+ggdraw() +
+  draw_image('~/st/arc_profiling/st_analysis/hand_annotated_data/images/408_slice_noboxes_nocolor.png',
+             x = 0, y = 0) +
+  draw_plot(bad_colors)
+```
+```{r}
+DimPlot(jy_408, reduction = "XY", pt.size = 0.1)+ scale_y_reverse() + scale_x_reverse()   + xlim(852, 0) + ylim(1242, 0) # + NoLegend() + NoAxes()
+```
+```{r}
+jy_408_sp <- df_408 %>%
+  dplyr::select(-c(area, IMAGE.NAME)) %>%
+  t() %>%
+  CreateSeuratObject()
+jy_408_sp <- FindVariableFeatures(jy_408_sp, selection.method = "vst")
+all.genes <- rownames(jy_408)
+jy_408_sp <- ScaleData(jy_408_sp, features = all.genes)
+jy_408_sp <- RunPCA(jy_408_sp, approx = FALSE)
+jy_408_sp <- FindNeighbors(jy_408_sp, dims = 1:30)
+jy_408_sp <- FindClusters(jy_408_sp, resolution = 0.8)
+jy_408_sp <- RunUMAP(jy_408_sp, dims = 1:30)
+
+DimPlot(jy_408_sp, reduction = "umap", group.by = 'seurat_clusters')
+```
+```{r}
+jy_408_sp[["XY"]] <- CreateDimReducObject(embeddings = xycords, key = "pixel_", assay = DefaultAssay(jy_408_sp))
+```
+
+```{r}
+DimPlot(jy_408_sp, reduction = "XY", split.by = 'seurat_clusters')
+```
+
+
+```{r}
+FeaturePlot(jy_408_sp, c('X', 'Y'))
+```
+
+```{r}
+reln <- normed['VLDLR',] != 0 & normed['LRP8',] == 0 & jy_408$gad1_true 
+lrp8 <- normed['VLDLR',] == 0 & normed['LRP8',] != 0 & jy_408$gad1_true 
+relnboth <- normed['VLDLR',] != 0 & normed['LRP8',] != 0 & jy_408$gad1_true 
+relnneither <- normed['VLDLR',] == 0 & normed['LRP8',] == 0 & jy_408$gad1_true 
+non_interneuron <- !jy_408$gad1_true 
+
+jy_408$reln_signaling = 'error'
+jy_408$reln_signaling[reln] = 'VLDLR'
+jy_408$reln_signaling[lrp8] = 'LRP8'
+jy_408$reln_signaling[relnboth] = 'VLDLR & LRP8'
+jy_408$reln_signaling[relnneither] = 'Neither'
+jy_408$reln_signaling[non_interneuron] = 'Non-IN'
+```
+
+
+```{r}
+## just define sets of cells that I want to plot
+cingulate_MS = grepl('CC', df_408$IMAGE.NAME) 
+dorsal_TC_MS = df_408$IMAGE.NAME %in% outer('TC_', 2:10, FUN=paste0)
+ventral_TC_MS = !cingulate_MS & !dorsal_TC_MS
+```
+
+```{r}
+FeaturePlot(jy_408, cells = which(ventral_TC_MS), reduction = "XY", features = 'TBR1') + scale_y_reverse() + scale_x_reverse() 
+```
+```{r}
+FeaturePlot(jy_408, cells = which(ventral_TC_MS), reduction = "XY", features = 'LRP8') + scale_y_reverse() + scale_x_reverse() 
+```
+
+
+```{r}
+FeaturePlot(jy_408, cells = which(dorsal_TC_MS), reduction = "XY", features = c('CXCR4', 'CALB2'), order = TRUE) + scale_y_reverse() + scale_x_reverse() 
+```
+```{r}
+FeaturePlot(jy_408, cells = which(ventral_TC_MS), reduction = "XY", features = c('CXCR4', 'CALB2'), order = TRUE) + scale_y_reverse() + scale_x_reverse() 
+```
+```{r}
+FeaturePlot(jy_408, cells = which(cingulate_MS), reduction = "XY", features = c('NKX2.1'), order = TRUE) + scale_y_reverse() + scale_x_reverse() 
+```
+
+
+```{r}
+FeaturePlot(jy_408, cells = which(ventral_TC_MS), reduction = "XY", features = c('CXCR4', 'CALB2'), order = TRUE) +
+  stat_density_2d(aes(fill = ..density..), geom = "raster", contour = FALSE) +
+  scale_fill_distiller(palette=4, direction=-1) 
+```
+
+```{r}
+normed_data = t(as.matrix(GetAssayData(jy_408, slot = 'data'))) 
+norm_bools = normed_data > 0
+
+density_df = as.data.frame(cbind(xycords, norm_bools, jy_408$seurat_clusters))
+colnames(density_df) = c('X', 'Y', colnames(norm_bools), 'cluster')
+density_df$fov = 'error'
+density_df$fov[dorsal_TC_MS] = 'dMS_TC'
+density_df$fov[ventral_TC_MS] = 'vMS_TC'
+density_df$fov[cingulate_MS] = 'MS_CC'
+```
+
+```{r}
+density_df %>%
+  ggplot(aes(x = X, y = Y))  +
+  geom_bin2d(bins = 20) +
+  scale_fill_continuous(type = "viridis") +
+  theme_bw()
+
+```
+
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        #cols = c('grey', 'purple', 'blue', 'red', 'hotpink1'), 
+        reduction = "XY", pt.size = 0.1, split.by = 'reln_signaling', 
+        cells.highlight = list(vldlr = which(reln), lrp8 = which(lrp8), both = which(relnboth)),
+        cols.highlight = c('orange1','hotpink1', 'black'), 
+        order = which(jy_408$gad1_true)) + scale_y_reverse() + scale_x_reverse()
+```
+
+
+## LEts do the functional graphs
+```{r}
+goi_primary = c('VIP', 'SST', 'CXCR4')
+goi = c('VIP', 'SST', 'CXCR4', 'CXCR7', 'CXCL14', 'CXCL12', 'LRP8', 'VLDLR', 'RELN')
+goi = c('DCDC2', 'KIA0319')
+```
+
+## Let's compare SP8 vs COUPTF2 average expression of these markers
+```{r}
+fxn_genes  = as.data.frame(normed_data[, goi])
+fxn_genes$cge = jy_408$cge_lineage
+fxn_genes$fov = density_df$fov
+
+fxn_genes %>%
+  filter(fov == 'dMS_TC') %>%
+  pivot_longer(!c(cge, fov), names_to = "gene", values_to = "expr") %>%
+  ggplot(aes(x = gene, y = expr, fill = cge)) + geom_boxplot()# geom_bar(position="dodge", stat="identity")
+```
+
+```{r}
+fxn_genes %>%
+  filter(fov == 'vMS_TC') %>%
+  pivot_longer(!c(cge, fov), names_to = "gene", values_to = "expr") %>%
+  ggplot(aes(x = gene, y = expr, fill = cge)) + geom_boxplot()# geom_bar(position="dodge", stat="identity")
+```
+
+```{r}
+cfov = 'MS_CC'
+fxn_genes %>%
+  filter(fov == cfov) %>%
+  pivot_longer(!c(cge, fov), names_to = "gene", values_to = "expr") %>%
+  ggplot(aes(x = gene, y = expr, fill = cge)) + geom_bar(position="dodge", stat="identity") +
+  scale_fill_manual(values=c("green","gray","gray","blue", "red")) + ggtitle(cfov)
+```
+```{r}
+cfov = 'vMS_TC'
+fxn_genes %>%
+  filter(fov == cfov) %>%
+  pivot_longer(!c(cge, fov), names_to = "gene", values_to = "expr") %>%
+  ggplot(aes(x = gene, y = expr, fill = cge)) + geom_bar(position="dodge", stat="identity") +
+  scale_fill_manual(values=c("green","gray","gray","blue", "red")) + ggtitle(cfov)
+```
+
+```{r}
+cfov = 'dMS_TC'
+fxn_genes %>%
+  filter(fov == cfov) %>%
+  pivot_longer(!c(cge, fov), names_to = "gene", values_to = "expr") %>%
+  ggplot(aes(x = gene, y = expr, fill = cge)) + geom_bar(position="dodge", stat="identity") +
+  scale_fill_manual(values=c("green","gray","gray","blue", "red")) + ggtitle(cfov)
+```
+```{r}
+fxn_genes  = as.data.frame(norm_bools[, goi])
+fxn_genes$cge = jy_408$cge_lineage
+fxn_genes$fov = density_df$fov
+
+fxn_genes %>%
+  filter(fov == 'dMS_TC') %>%
+  pivot_longer(!c(cge, fov), names_to = "gene", values_to = "expr") %>%
+  ggplot(aes(x = gene, y = as.numeric(expr), fill = cge)) + geom_bar(position="dodge", stat="summary", fun = "mean") +
+  xlab("pct") + ggtitle('dMS_TC')
+```
+
+```{r}
+fxn_genes  = as.data.frame(norm_bools[, goi])
+fxn_genes$cge = jy_408$cge_lineage
+fxn_genes$fov = density_df$fov
+
+cfov = 'vMS_TC'
+
+fxn_genes %>%
+  filter(fov == cfov) %>%
+  select(-fov) %>%
+  pivot_longer(!mge, names_to = "gene", values_to = "expr") %>%
+  data_summary(varname="expr", groupnames=c("gene", "mge")) %>%
+  ggplot(aes(x=gene, y=expr, fill=mge)) + geom_bar(stat="identity", color="black", position=position_dodge())  + geom_errorbar(aes(ymin=expr-sem, ymax=expr+sem), width=.2, position=position_dodge(.9)) +
+  ylab("pct") + ggtitle(cfov) + scale_fill_manual(values=c("cadetblue1","brown2","darkslateblue","grey", "khaki1")) +
+  theme_classic()
+
+#c("cadetblue1","brown2","darkslateblue","grey", "khaki1") for mge
+```
+
+```{r}
+#http://www.sthda.com/english/wiki/ggplot2-error-bars-quick-start-guide-r-software-and-data-visualization
+library(plotrix)
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sem = std.error(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+```
+```{r}
+df2 <- fxn_genes %>%
+  select(-fov) %>%
+  pivot_longer(!cge, names_to = "gene", values_to = "expr") %>%
+  data_summary(varname="expr", 
+                    groupnames=c("gene", "cge"))
+```
+
+```{r}
+ ggplot(df2, aes(x=gene, y=expr, fill=cge)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) +
+  geom_errorbar(aes(ymin=expr-sem, ymax=expr+sem), width=.2,
+                 position=position_dodge(.9)) 
+```
+
+```{r}
+ ggplot(df2, aes(x=gene, y=expr, fill=cge)) + 
+  geom_bar(stat="identity", color="black", position=position_dodge()) +
+  geom_errorbar(aes(ymin=expr-sem, ymax=expr+sem), width=.2,
+                 position=position_dodge(.9)) 
+```
+
+```{r}
+FeaturePlot(jy_408_IN, reduction = 'XY', features = c('DCDC2', 'KIA0319'), order = TRUE)
+```
+```{r}
+fxn_genes %>%
+  select(-c(fov, mge)) %>%
+  pivot_longer(!cge, names_to = "gene", values_to = "expr") %>%
+  data_summary(varname="expr", groupnames=c("gene", "cge")) %>%
+  ggplot(aes(x=gene, y=expr, fill=cge)) + geom_bar(stat="identity", color="black", position=position_dodge())  + geom_errorbar(aes(ymin=expr-sem, ymax=expr+sem), width=.2, position=position_dodge(.9)) +
+  ylab("pct") + scale_fill_manual(values=c("darkolivegreen1","orange2","rosybrown4","gray96", "grey")) +
+  theme_classic()
+```
+```{r}
+sum(fxn_genes$cge == 'SP8 & COUPTF2')
+sum(jy_408$gad1_true)
+
+print(206/388)
+```
+
+## Order the images
+```{r}
+unique(df_408$IMAGE.NAME)
+images_ordered = c('TC_20', 'TC_17', 'TC_16', 'TC_15', 'TC_14', 'TC_13', 'TC_12', 'TC_11',
+           'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_4', 'TC_4', 'TC_3', 'TC_2',
+           'CC_4', 'CC_5', 'CC_6', 'CC_6', 'CC_8', 'CC_9', 'CC_10', 'CC_11', 'CC_12',
+           'CC_L2-1', 'CC_L2-2', 'CC_L2-3', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 25
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_408$X_horz = -1
+df_408$Y_horz = -1
+
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_408[df_408$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_408[df_408$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+```{r}
+hcoords = df_408 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_408))
+```
+
+```{r}
+jy_408$satb1_true = !jy_408$gad1_true
+DimPlot(jy_408, cols = c('grey', 'purple'), reduction = "H", pt.size = 0.25, group.by = 'gad1_true', order = which(jy_408$gad1_true)) + coord_fixed(ratio = 0.5) + NoAxes() + NoLegend()
+```
+```{r}
+DimPlot(jy_408, reduction = "H", pt.size = 0.25, group.by = 'mge_lineage', order = "NKX2.1 & LHX6", cells.highlight = which(jy_408$mge_lineage == 'NKX2.1 & LHX6'), cols.highlight = 'red') + coord_fixed(ratio = 1) +  NoLegend() + NoAxes()
+```
+
+```{r}
+theme_Publication <- function(base_size=14, base_family="helvetica") {
+      library(grid)
+      library(ggthemes)
+      (theme_foundation(base_size=base_size, base_family=base_family)
+       + theme(plot.title = element_text(face = "bold",
+                                         size = rel(1.2), hjust = 0.5),
+               text = element_text(),
+               panel.background = element_rect(colour = NA),
+               plot.background = element_rect(colour = NA),
+               panel.border = element_rect(colour = NA),
+               axis.title = element_text(face = "bold",size = rel(1)),
+               axis.title.y = element_text(angle=90,vjust =2),
+               axis.title.x = element_text(vjust = -0.2),
+               axis.text = element_text(), 
+               axis.line = element_line(colour="black"),
+               axis.ticks = element_line(),
+               panel.grid.major = element_line(colour="#f0f0f0"),
+               panel.grid.minor = element_blank(),
+               legend.key = element_rect(colour = NA),
+               legend.position = "bottom",
+               legend.direction = "horizontal",
+               legend.key.size= unit(0.2, "cm"),
+               legend.margin = unit(0, "cm"),
+               legend.title = element_text(face="italic"),
+               plot.margin=unit(c(10,5,5,5),"mm"),
+               strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
+               strip.text = element_text(face="bold")
+          ))
+      
+}
+
+scale_fill_Publication <- function(...){
+      library(scales)
+      discrete_scale("fill","Publication",manual_pal(values = c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")), ...)
+
+}
+
+scale_colour_Publication <- function(...){
+      library(scales)
+      discrete_scale("colour","Publication",manual_pal(values = c("#386cb0","#fdb462","#7fc97f","#ef3b2c","#662506","#a6cee3","#fb9a99","#984ea3","#ffff33")), ...)
+
+}
+```
+
+
+```{r}
+FeaturePlot(jy_408, pt.size=0.1, reduction = "H", features = 'LRP8') + coord_fixed(ratio = 0.5) +  theme_Publication() + NoLegend() + NoAxes()
+```
+

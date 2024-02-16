@@ -1,0 +1,238 @@
+---
+title: "st_regression"
+output: html_notebook
+---
+```{r}
+library(caret)
+```
+
+```{r}
+scaled_data <- as.data.frame(t(GetAssayData(jy_all, slot = "scale.data")))
+scaled_data$Y0 <- -1
+scaled_data$Y0[grepl('Dorsal', jy_all$broad_areas)] <- 1
+scaled_data$Y0[grepl('Ventral', jy_all$broad_areas)] <- 0
+
+print(sum(scaled_data$Y0 == -1))
+```
+
+```{r}
+mylogit <- glm(Y0 ~ ., data = scaled_data, family = "binomial")
+Ycoefs <- mylogit$coefficients
+Ypvals <- coef(summary(mylogit))[,4]
+summary(mylogit)
+```
+```{r}
+confint(mylogit)
+```
+```{r}
+set.seed(7)
+scaled_data$Y0 = as.factor(scaled_data$Y0)
+train_idx = createDataPartition(scaled_data$Y0, p = 0.80, list = FALSE)
+train = scaled_data[train_idx, ]
+test = scaled_data[-train_idx, ]
+```
+
+```{r}
+glm_mod = train(
+  form = Y0 ~ .,
+  data = train,
+  trControl = trainControl(method = "cv", number = 5),
+  method = "glm",
+  family = "binomial"
+)
+```
+```{r}
+glm_mod
+```
+
+```{r}
+predict(glm_mod, newdata = test, type = "prob")
+```
+```{r}
+test_predictions = predict(glm_mod, newdata = test)
+wrongs_ixs = which(test_predictions != test$Y0)
+right_ixs = which(test_predictions == test$Y0)
+test_ixs = which(colnames(jy_all) %in% rownames(test)[wrongs_ixs])
+rtest_ixs = which(colnames(jy_all) %in% rownames(test)[right_ixs])
+
+test_idents = as.character(Idents(jy_all))[test_ixs]
+test_meta = jy_all@meta.data[test_ixs, ]
+test_meta$ident = test_idents
+test_meta$result = 'Wrong'
+
+rtest_idents = as.character(Idents(jy_all))[rtest_ixs]
+rtest_meta = jy_all@meta.data[rtest_ixs, ]
+rtest_meta$ident = rtest_idents
+rtest_meta$result = 'Right'
+
+test_meta <- rbind(rtest_meta, test_meta)
+
+test_meta %>%
+ggplot(aes(x=factor(ident, levels = 0:12), fill = result)) +
+  geom_bar(position="dodge")
+```
+
+```{r}
+test_meta %>%
+ggplot(aes(x=area, fill = result)) +
+  geom_bar(position="dodge") + 
+  RotatedAxis()
+```
+```{r}
+calc_acc = function(actual, predicted) {
+  mean(actual == predicted)
+}
+calc_acc(actual = test$Y0,
+         predicted = predict(glm_mod, newdata = test))
+```
+## X0 Now, anterior versus posterior
+
+```{r}
+scaled_data <- as.data.frame(t(GetAssayData(jy_all, slot = "scale.data")))
+scaled_data$X0[grepl('aVentral', jy_all$broad_areas) | grepl('aDorsal', jy_all$broad_areas)] <- 1
+scaled_data$X0[grepl('pVentral', jy_all$broad_areas) | grepl('pDorsal', jy_all$broad_areas)] <- 0
+
+print(sum(scaled_data$X0 == 1))
+```
+
+```{r}
+mylogit <- glm(X0 ~ ., data = scaled_data, family = "binomial")
+Xcoefs <- mylogit$coefficients
+Xpvals <- coef(summary(mylogit))[,4]
+summary(mylogit)
+```
+```{r}
+confint(mylogit)
+```
+```{r}
+set.seed(7)
+scaled_data$X0 = as.factor(scaled_data$X0)
+train_idx = createDataPartition(scaled_data$X0, p = 0.80, list = FALSE)
+train = scaled_data[train_idx, ]
+test = scaled_data[-train_idx, ]
+```
+
+```{r}
+glm_mod = train(
+  form = X0 ~ .,
+  data = train,
+  trControl = trainControl(method = "cv", number = 5),
+  method = "rf"
+)
+```
+```{r}
+glm_mod
+```
+
+```{r}
+test_predictions = predict(glm_mod, newdata = test)
+wrongs_ixs = which(test_predictions != test$X0)
+right_ixs = which(test_predictions == test$X0)
+test_ixs = which(colnames(jy_all) %in% rownames(test)[wrongs_ixs])
+rtest_ixs = which(colnames(jy_all) %in% rownames(test)[right_ixs])
+
+test_idents = as.character(Idents(jy_all))[test_ixs]
+test_meta = jy_all@meta.data[test_ixs, ]
+test_meta$ident = test_idents
+test_meta$result = 'Wrong'
+
+rtest_idents = as.character(Idents(jy_all))[rtest_ixs]
+rtest_meta = jy_all@meta.data[rtest_ixs, ]
+rtest_meta$ident = rtest_idents
+rtest_meta$result = 'Right'
+
+test_meta <- rbind(rtest_meta, test_meta)
+
+test_meta %>%
+ggplot(aes(x=factor(ident, levels = 0:12), fill = result)) +
+  geom_bar(position="dodge")
+```
+
+```{r}
+test_meta %>%
+ggplot(aes(x=area, fill = result)) +
+  geom_bar(position="dodge") + 
+  RotatedAxis()
+```
+
+
+```{r}
+calc_acc = function(actual, predicted) {
+  mean(actual == predicted)
+}
+calc_acc(actual = test$X0,
+         predicted = predict(glm_mod, newdata = test))
+```
+
+
+### Now some plots
+
+```{r}
+#scaled_data <- as.data.frame(t(GetAssayData(jy_all, slot = "scale.data")))
+#scaled_data$
+
+gene_names <- rownames(coef(summary(mylogit)))
+
+coef_df <- as.data.frame(cbind(Xcoefs, Ycoefs, Xpvals, Ypvals))
+rownames(coef_df) <- gene_names
+colnames(coef_df) <- c('x', 'y', 'x_sig', 'y_sig')
+```
+```{r}
+coef_df %>%
+  ggplot(aes(x = x, y = y, label = rownames(coef_df))) + 
+geom_text_repel() +
+  #geom_point(data = subset(coef_df, x_sig > 0.05 & y_sig > 0.05), shape = 1) +
+  #geom_point(data = subset(coef_df, x_sig <= 0.05 & y_sig > 0.05), shape = 18) +
+  #geom_point(data = subset(coef_df, x_sig > 0.05 & y_sig <=0.05), shape = 15) +
+  #geom_point(data = subset(coef_df, x_sig <= 0.05 & y_sig <= 0.05)) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  xlab('Posterior - Anterior') + 
+  ylab('Ventral - Dorsal') + 
+  theme_classic()
+```
+```{r}
+p_threshold = 0.001
+cplot <- coef_df %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_point(data = subset(coef_df, x_sig > p_threshold & y_sig > p_threshold), shape = 1) +
+  geom_point(data = subset(coef_df, x_sig <= p_threshold & y_sig > p_threshold), shape = 18) +
+  geom_point(data = subset(coef_df, x_sig > p_threshold & y_sig <=p_threshold), shape = 15) +
+  geom_point(data = subset(coef_df, x_sig <= p_threshold & y_sig <= p_threshold)) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  geom_text_repel(aes(label = rownames(coef_df))) + 
+  xlab('Posterior - Anterior') + 
+  ylab('Ventral - Dorsal') + 
+  theme_classic() + 
+  ggtitle(paste0('Coefficients for logistic regression', '| p-val: ', p_threshold))
+ggsave(plot = cplot, filename = paste0('pval_', p_threshold, 'logistic_regression_initial.png'), path = file.path(output_dir_plot, '20220729_1'), dpi = 150)
+```
+
+## Try generic Y distance
+```{r}
+scaled_data <- as.data.frame(t(GetAssayData(jy_164, slot = "scale.data")))
+scaled_data$Yplot <- df_164$Y_horz
+
+lmHeight = lm(Yplot~., data = scaled_data) #Create the linear regression
+summary(lmHeight) 
+```
+```{r}
+resid_df <- as.data.frame(cbind(jy_164$unified_clusters, scaled_data$Yplot, lmHeight$residuals))
+colnames(resid_df) <- c('cluster', 'Y', 'resid')
+
+resid_df %>%
+  ggplot(aes(x = Y, y = resid, color = as.factor(cluster))) + geom_point()
+```
+```{r}
+resid_df %>%
+  ggplot(aes(x = as.factor(cluster), y = resid)) + geom_boxplot(notched = TRUE)
+```
+
+
+
+```{r}
+lmHeight = lm(height~age, data = ageandheight) #Create the linear regression
+summary(lmHeight) 
+```
+

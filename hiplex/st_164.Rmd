@@ -1,0 +1,521 @@
+---
+title: "st_164"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+July 21st, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+library(png)
+library(cowplot)
+library(magick)
+library(scales)
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+meta_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/overlay'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_164 = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  if(grepl('408', file_name)){
+    next
+  }
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  
+  ## Add relative_XY_position
+  
+  if(!is_empty(df_164)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df_164))
+  }
+  df_164 <- rbind(df_164, df_to_append)
+}
+```
+```{r}
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='CC-', replacement='CC_'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='X', replacement=''))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='L2', replacement='CC_L2'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='L2_', replacement='L2-'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='-L2', replacement='_L2'))
+tc_cortical_names_bad = df_164[grepl('TC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME']
+df_164[grepl('TC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME'] = unlist(lapply(tc_cortical_names_bad, gsub, pattern='Cort', replacement='TC_Cort'))
+cc_cortical_names_bad = df_164[grepl('CC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME']
+df_164[grepl('CC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME'] = unlist(lapply(cc_cortical_names_bad, gsub, pattern='Cort', replacement='CC_Cort'))
+#df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='Tc_12', replacement='TC_12'))
+## Missing
+#df_164 = df_164[df_164$IMAGE.NAME != 'Layer1', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_1', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_18', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_19', ]
+#df_164$IMAGE.NAME = toupper(df_164$IMAGE.NAME)
+unique(df_164$IMAGE.NAME)
+```
+## Now we know that everything is equal to one another, we should load the variable
+
+```{r}
+image_names = unique(df_164$IMAGE.NAME)
+# Preset these variables to negative values so I can easily check if they were updated later
+df_164$X = -1
+df_164$Y = -1
+# set some normalization variables
+## This is the size of the image when the pixel values are taken from top left down
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 32
+TC_IMAGE_HEIGHT = 410
+TC_IMAGE_WIDTH = 446
+CC_IMAGE_HEIGHT= 422
+CC_IMAGE_WIDTH = 214
+
+# Load the dataframe with global and relative coordinates
+img_cords = read.table(file.path(meta_dir, '164_pixel_coordinates.csv'), sep = ',', header = TRUE)
+
+images = list.files(meta_dir)
+for(image_name in image_names){
+    if(grepl('408', image_name)){
+      next
+    }
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    if(cortex == 'CC'){ 
+      print(paste('cc', filename, image_name))
+      ## So if CC, we add the coordinates for TC_1 to overall image coordinates
+      x_adj = img_cords[img_cords$Name == 'TC_1', 'x'] + 
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'x']
+      ## Start from bottom, add the height, subtract TC_1 height, and then global CC1 to TC1
+      y_adj = TC_IMAGE_HEIGHT - img_cords[img_cords$Name == 'TC_1', 'y'] +
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'y'] + CC_IMAGE_HEIGHT
+    }else{
+      print(paste('tc', filename, image_name))
+      x_adj = 0
+      y_adj = TC_IMAGE_HEIGHT
+    }
+    
+    ## So don't do repelled for now
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    ## so the resized x distance is from left, so just add to the box location and adj
+    df_164[df_164$IMAGE.NAME == image_name, 'X'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + 
+                                                    img_cords[img_cords$Name == image_name, 'x'] + x_adj
+    ## resized y distance
+    df_164[df_164$IMAGE.NAME == image_name, 'Y'] = y_adj - img_cords[img_cords$Name == image_name, 'y'] - 
+                                                      (coordinates$Y_Coordinate_In_pixels / IMAGE_SIZE * 
+                                                      IMAGE_LEN)  
+}
+```
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_164) = 1:nrow(df_164)
+jy_164 = df_164 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X, Y)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_164 <- NormalizeData(jy_164, scale.factor = 1e5) ###
+normed = GetAssayData(jy_164, slot = 'data')
+normed[normed < 3] = 0
+jy_164 <- SetAssayData(jy_164, slot = 'data', normed)
+```
+
+```{r}
+xycords = df_164 %>% dplyr::select(c('X', 'Y')) %>% as.matrix()
+colnames(xycords) <- c('pixel_1', 'pixel_2')
+
+jy_164[["XY"]] <- CreateDimReducObject(embeddings = xycords, key = "pixel_", assay = DefaultAssay(jy_164))
+```
+
+```{r}
+jy_164$gad1_true = normed['GAD1',] != 0 #& normed['SATB2',] == 0
+```
+
+```{r}
+DimPlot(jy_164, #cells = grepl('CC', df_164$area), 
+        cols = c('purple', 'grey'), reduction = "XY", pt.size = 0.2, group.by = 'gad1_true', order = which(jy_164$gad1_true)) + coord_fixed(ratio = 1)
+```
+```{r}
+jy_164 <- FindVariableFeatures(jy_164, selection.method = "vst")
+all.genes <- rownames(jy_164)
+jy_164 <- ScaleData(jy_164, features = all.genes)
+jy_164 <- RunPCA(jy_164, approx = FALSE)
+jy_164 <- FindNeighbors(jy_164, dims = 1:30)
+jy_164 <- FindClusters(jy_164, resolution = 0.8)
+jy_164 <- RunUMAP(jy_164, dims = 1:30)
+
+DimPlot(jy_164,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+```{r}
+DimPlot(jy_164, reduction = "XY", pt.size = 1, split.by = 'seurat_clusters') + NoAxes() + NoLegend()
+```
+```{r}
+jy_164.markers <- FindAllMarkers(jy_164, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_164.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+```{r}
+breakpoints = 1:20/10+0.3
+plots = list()
+jy_164 <- FindNeighbors(jy_164, dims = 1:30)
+i = 1
+for (breakpoint in breakpoints){
+  jy_164 <- FindClusters(jy_164, resolution = breakpoint)
+  jy_164 <- RunUMAP(jy_164, dims = 1:30)
+  jy_164.markers <- FindAllMarkers(jy_164, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+  labels = jy_164.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 1, order_by = avg_log2FC)
+  new.cluster.ids <- labels$gene
+  names(new.cluster.ids) <- levels(jy_164)
+  jy_164 <- RenameIdents(jy_164, new.cluster.ids)
+  plots[[i]] = DimPlot(jy_164, reduction = "umap", pt.size = 1, label = TRUE) + NoAxes() + NoLegend() + ggtitle(breakpoint)
+  i = i + 1
+}
+
+marrangeGrob(plots, nrow=2, ncol=2)
+ml <- marrangeGrob(plots, nrow=2, ncol=2)
+ggsave(filename = 'sequential_clustering_umaps.pdf', path = file.path(output_dir_plot, '20220721_1'), ml)
+```
+
+```{r}
+plot_features_umap <- function(sobj, gene, pt.size = 3, space = "umap")
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- as.matrix(FetchData(sobj, gene))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df <- gene_df %>% dplyr::arrange(!is.na(expr), expr)
+  colors = c('grey90', 'grey90', '#CB2A55')
+  gene_df$expr[gene_df$expr == 0] = NA
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = expr)) + geom_point(size = pt.size, alpha = 0.8)+  
+            theme_classic() + ggtitle(gene) + NoAxes() + NoLegend() +  scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3], labels = NULL)  + theme(title = element_text(face = 'bold', size = rel(1), hjust = 1)) 
+  return(plot)
+}
+plot_features_umap(jy_164, 'VIP')
+```
+```{r fig.height=8, fig.width=18}
+genes = rownames(jy_164)
+plots <- lapply(1:length(genes), function(i){
+    plot_features_umap(jy_164, genes[i], pt.size = 1)
+  })
+umaps = plot_grid(plotlist = plots, label_size = 10)
+ggsave(plot = umaps, filename = 'test_164_umapl_expr_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 18, height = 8, dpi = 150)
+
+```
+```{r}
+plot_features_xy <- function(sobj, gene, pt.size = 12, space = "XY")
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- as.matrix(FetchData(sobj, gene))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df <- gene_df %>% dplyr::arrange(!is.na(expr), expr)
+  colors = c('grey90', 'grey90', '#CB2A55')
+  gene_df$expr[gene_df$expr == 0] = NA
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = expr)) + geom_point(size = pt.size, alpha = 0.8)+  
+            theme_classic() + ggtitle(gene) + NoAxes() + NoLegend() +  scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3], labels = NULL)  + theme(title = element_text(face = 'bold', size = rel(1), hjust = 1)) 
+  return(plot)
+}
+plot_features_xy(jy_164[,df_164$IMAGE.NAME == 'TC_1'], 'GSX2')
+```
+## Order the images
+```{r}
+unique(df_164$IMAGE.NAME)
+images_ordered = c('TC_Cortical3', 'TC_Cortical2', 'TC_Cortical1', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5', 'TC_4', 'TC_3', 'TC_2','TC_1','CC_2','CC_3',
+           'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10',
+           'CC_L2-1', 'CC_L2-2', 'CC_L2-3', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_164$X_horz = -1
+df_164$Y_horz = -1
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_164[df_164$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_164[df_164$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+```{r}
+hcoords = df_164 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_164[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_164))
+```
+
+```{r}
+plot_features_vertical_spatial <- function(sobj, gene, pt.size = 1, space = "H", arc = TRUE, mdn_theta = TRUE)
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- as.matrix(FetchData(sobj, gene))
+  if(mdn_theta){
+    if (gene == 'DCX'){
+    mdn_gene_expr = 0.5
+    print('skip dcx')
+  } else if (!gene %in% c('COUPTF2', 'SP8')){
+    mdn_gene_expr = median(expmat[expmat > 0])
+  }else{
+    mdn_gene_expr = quantile(expmat[expmat > 0], .40)
+  }
+
+  expmat[expmat < mdn_gene_expr] = 0
+  }
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df <- gene_df %>% dplyr::arrange(!is.na(expr), expr)
+  colors = c('grey90', 'grey90', '#CB2A55')
+  gene_df$expr[gene_df$expr == 0] = NA
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = expr)) + geom_point(size = pt.size, alpha = 1)+  
+            theme_classic() + ggtitle(gene) + NoAxes() + NoLegend() + 
+    coord_fixed(ratio = 0.5) + scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3], labels = NULL)  + theme(title = element_text(face = 'bold', size = rel(0.5), hjust = 1)) 
+  if(arc){plot = plot + geom_hline(yintercept=484, linetype = "dashed",color = colors[3])}
+  return(plot)
+}
+plot_features_vertical_spatial(jy_164, 'CXCR7', mdn_theta = TRUE)
+```
+```{r fig.height=2, fig.width=1}
+genes = rownames(jy_164)
+genes = c('CXCR7', 'CXCR4', 'CXCL12', 'CXCL14')
+plots <- lapply(1:length(genes), function(i){
+    plot_features_vertical_spatial(jy_408, genes[i], pt.size = 1)
+  })
+verts= plot_grid(plotlist = plots, label_size = 2, nrow = 1)
+verts
+#ggsave(plot = verts, filename = 'test_164_vertical_expr_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 18, height = 8, dpi = 150)
+```
+```{r}
+
+```
+
+## Do the clustering stuff here 
+```{r}
+plot_clusters_vertical_spatial <- function(sobj, cluster, clustering = NULL, cluster_color =  '#CB2A55', pt.size = 1, space = "H", arc = TRUE)
+{
+  cluster_identity = as.numeric(unlist(ifelse(is.null(clustering),
+                                              Idents(sobj),sobj[[clustering]]))) == (cluster)
+  coordinates <- Embeddings(sobj, reduction = space)
+  gene_df <- as.data.frame(cbind(coordinates, cluster_identity))
+  colnames(gene_df) <- c('X', 'Y', 'clust')
+  gene_df <- gene_df %>% dplyr::arrange(clust)
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = factor(clust))) + geom_point(size = pt.size, alpha = 1) +  
+            theme_classic() + ggtitle(cluster) + NoAxes() + NoLegend() + 
+    coord_fixed(ratio = 0.5)  + theme(title = element_text(face = 'bold', size = rel(0.8), hjust = 1)) 
+  cluster_color = scales::hue_pal()(nrow(unique(expmat)))[cluster]
+  plot = plot + scale_colour_manual(values = c('grey90', cluster_color))
+  if(arc){plot = plot + geom_hline(yintercept=484, linetype = "dashed",color = cluster_color)}
+  return(plot)
+}
+plot_clusters_vertical_spatial(jy_164, pt.size = 1,cluster = 1, clustering = 'RNA_snn_res.2.2')
+```
+
+
+```{r}
+clusters = as.numeric(sort(unique(jy_164$RNA_snn_res.2.2)))
+plots <- lapply(1:length(clusters), function(i){
+    plot_clusters_vertical_spatial(jy_164, cluster = clusters[i], pt.size = 1, clustering = 'RNA_snn_res.2.2')
+  })
+verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+ggsave(plot = verts, filename = 'test_164_vertical_cluster_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 6, height = 8, dpi = 150)
+```
+
+```{r}
+plot_clusters_umap <- function(sobj, clustering, pt.size = 3, space = "umap")
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- sobj[[clustering]]
+  #expmat  = as.character(Idents(sobj))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df$X = as.numeric(gene_df$X)
+  gene_df$Y = as.numeric(gene_df$Y)
+  summary_gene_df = gene_df %>% dplyr::group_by(expr) %>% dplyr::summarise(xmean = mean(X), ymean = mean(Y))
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = as.factor(expr))) + geom_point(size = pt.size, alpha = 0.8)+ geom_label(data = summary_gene_df,
+                                                                                                                 mapping = aes(x = xmean, 
+                           y = ymean), 
+                           label = summary_gene_df$expr) +
+            theme_classic() + ggtitle(clustering) + NoAxes() + NoLegend()  + theme(title = element_text(face = 'bold', size = rel(1), hjust = 1)) 
+  cluster_colors = scales::hue_pal()(nrow(unique(expmat)))
+  plot = plot + scale_colour_manual(values = cluster_colors)
+  return(plot)
+}
+p = plot_clusters_umap(jy_164, clustering ='RNA_snn_res.2.2')
+p
+```
+
+```{r}
+scales::hue_pal()(3)
+```
+
+```{r}
+DimPlot(jy_164, cells.highlight = list('migratory' = which(grepl('MS', df_164$area))), cols.highlight = '#CB2A55')
+```
+
+```{r}
+small_dimplot <- function(sobj, grep_pattern){
+  dp = DimPlot(jy_164, cells.highlight = list(imp = which(grepl(grep_pattern, df_164$area))))
+  dp <- dp + scale_color_manual(values = c('grey90', '#CB2A55'), labels=c('other', grep_pattern))
+}
+
+patterns = c('164_CC', 'MS_CC', 'MS_TC', '164_TC')
+plots <- lapply(1:length(patterns), function(i){
+    small_dimplot(jy_164, grep_pattern = patterns[i])
+  })
+areas = plot_grid(plotlist = plots, label_size = 10, nrow = 2)
+areas
+```
+```{r}
+DimPlot(jy_164, cells.highlight = list('CC' = which(grepl('CC', df_164$area))), cols.highlight = '#CB2A55')
+```
+
+
+```{r}
+images = list.files(meta_dir)
+squeeze_factor = 1.8
+for(image_name in image_names){
+    if(grepl('408', image_name)){
+      next
+    }
+    #print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    if(cortex == 'CC'){ 
+     # print(paste('cc', filename, image_name))
+      ## So if CC, we add the coordinates for TC_1 to overall image coordinates
+      x_adj = img_cords[img_cords$Name == 'TC_1', 'x'] + 
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'x'] -20
+      ## Start from bottom, add the height, subtract TC_1 height, and then global CC1 to TC1
+      y_adj = TC_IMAGE_HEIGHT - img_cords[img_cords$Name == 'TC_1', 'y'] +
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'y'] + CC_IMAGE_HEIGHT + 35
+    }else{
+      #print(paste('tc', filename, image_name))
+      x_adj = 0
+      y_adj = TC_IMAGE_HEIGHT
+    }
+    
+    ## So don't do repelled for now
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    ## so the resized x distance is from left, so just add to the box location and adj
+    df_164[df_164$IMAGE.NAME == image_name, 'X'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) /squeeze_factor + 
+                                                    img_cords[img_cords$Name == image_name, 'x']/squeeze_factor + x_adj
+    ## resized y distance
+    df_164[df_164$IMAGE.NAME == image_name, 'Y'] = y_adj - img_cords[img_cords$Name == image_name, 'y'] / squeeze_factor - 
+                                                      (coordinates$Y_Coordinate_In_pixels / IMAGE_SIZE * 
+                                                      IMAGE_LEN) / squeeze_factor
+}
+xycords = df_164 %>% dplyr::select(c('X', 'Y')) %>% as.matrix()
+colnames(xycords) <- c('pixel_1', 'pixel_2')
+
+jy_164[["XY"]] <- CreateDimReducObject(embeddings = xycords, key = "pixel_", assay = DefaultAssay(jy_164))
+```
+
+
+```{r}
+#https://stackoverflow.com/questions/9917049/inserting-an-image-to-ggplot2
+
+theme_set(theme_cowplot())
+
+bad_colors <- DimPlot(jy_164, cols = c('green'), reduction = "XY", pt.size = 0.005) + coord_fixed() + NoAxes() + NoLegend()
+
+#xorig = -852
+#yorig = -1242
+
+ggdraw() +
+  draw_image('~/st/arc_profiling/st_analysis/hand_annotated_data/images/164_slice.png',
+             x = 0, y = 0, scale = 1) +
+  draw_plot(bad_colors)
+```
+
+```{r}
+DimPlot(jy_164, cols = c('green1'), reduction = "XY", pt.size = 0.005) + coord_fixed() + NoAxes() + NoLegend()
+```
+

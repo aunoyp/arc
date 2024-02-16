@@ -1,0 +1,1049 @@
+---
+title: "st_clumps"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+July 21st, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+library(png)
+library(cowplot)
+library(magick)
+library(scales)
+library(packcircles)
+library(ggalt)
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+clump_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clumps'
+meta_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/overlay'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+### plot the meta data real quick
+```{r}
+meta_ntrscts = read.csv(file.path(clump_dir, 'meta', 'META_ntrsct.csv'), header = FALSE) %>%
+  as_tibble()
+```
+
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_408 = data.frame()
+for (file_name in list.files(data_dir)){
+  if(grepl('164', file_name)){
+    next
+  }
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  print(file_name)
+
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  
+  print(df_to_append)
+
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  
+  ## Add relative_XY_position
+  
+  if(!is_empty(df_408)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df_408))
+  }
+  df_408 <- rbind(df_408, df_to_append)
+}
+```
+```{r}
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='_Cluster', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='X', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='L2_', replacement='L2-'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='-L2', replacement='_L2'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='Tc_12', replacement='TC_12'))
+## Missing
+df_408 = df_408[df_408$IMAGE.NAME != 'Layer1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_18', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_19', ]
+#df_408$IMAGE.NAME = toupper(df_408$IMAGE.NAME)
+unique(df_408$IMAGE.NAME)
+```
+
+
+## Order the images
+```{r}
+unique(df_408$IMAGE.NAME)
+images_ordered = c('TC_20', 'TC_17', 'TC_16', 'TC_15', 'TC_14', 'TC_13', 'TC_12', 'TC_11', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5',
+                   'TC_4', 'TC_3', 'TC_2', 'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10', 'CC_11', 'CC_12', 'CC_L2-3', 'CC_L2-2', 'CC_L2-1', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_408$X_horz = -1
+df_408$Y_horz = -1
+df_408$clump = NaN
+clump_header = '408_'
+clump_files = list.files(clump_dir)
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 25
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('408', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+    
+    ## Get the clumps
+    filename = clump_files[grepl(clump_header, clump_files) & grepl(paste0(image_name, '_'),clump_files)]
+    clump_df = as.data.frame(t(read.csv(file.path(clump_dir, filename), header = FALSE)))
+    colnames(clump_df) = c('roi', 'cluster')
+    clump_df$roi = as.numeric(clump_df$roi)
+    
+    image_idxs = which(df_408$IMAGE.NAME == image_name)
+    clump_df$roi_idxs = image_idxs[1] + clump_df$roi - 1
+    df_408[clump_df$roi_idxs, "clump"] = paste0(clump_header, image_name, '_', clump_df$cluster)
+    
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_408[df_408$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_408[df_408$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_408) = 1:nrow(df_408)
+jy_408 = df_408 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X_horz, Y_horz, clump)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
+normed = GetAssayData(jy_408, slot = 'data')
+normed[normed < 3] = 0
+for(gene_name in rownames(jy_408)) {
+  mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+  #print(gene_name)
+  #print(mdn_gene_expr)
+  #normed[gene_name, normed[gene_name, ] < mdn_gene_expr] = 0
+}
+jy_408 <- SetAssayData(jy_408, slot = 'data', normed)
+```
+
+```{r}
+jy_408 <- FindVariableFeatures(jy_408, selection.method = "vst")
+all.genes <- rownames(jy_408)
+jy_408 <- ScaleData(jy_408, features = all.genes)
+jy_408 <- RunPCA(jy_408, approx = FALSE)
+jy_408 <- FindNeighbors(jy_408, dims = 1:30)
+jy_408 <- FindClusters(jy_408, resolution = 1.5)
+jy_408 <- RunUMAP(jy_408, dims = 1:30)
+
+DimPlot(jy_408,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+```{r}
+jy_408$clump = df_408$clump
+
+DimPlot(jy_408,  reduction = "umap", group.by = 'clump') + NoAxes() + NoLegend()
+
+```
+
+
+```{r}
+hcoords = df_408 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_408))
+```
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_164 = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  if(grepl('408', file_name)){
+    next
+  }
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  
+  ## Add relative_XY_position
+  
+  if(!is_empty(df_164)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df_164))
+  }
+  df_164 <- rbind(df_164, df_to_append)
+}
+```
+```{r}
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='CC-', replacement='CC_'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='X', replacement=''))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='L2', replacement='CC_L2'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='L2_', replacement='L2-'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='-L2', replacement='_L2'))
+tc_cortical_names_bad = df_164[grepl('TC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME']
+df_164[grepl('TC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME'] = unlist(lapply(tc_cortical_names_bad, gsub, pattern='Cort', replacement='TC_Cort'))
+cc_cortical_names_bad = df_164[grepl('CC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME']
+df_164[grepl('CC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME'] = unlist(lapply(cc_cortical_names_bad, gsub, pattern='Cort', replacement='CC_Cort'))
+#df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='Tc_12', replacement='TC_12'))
+## Missing
+#df_164 = df_164[df_164$IMAGE.NAME != 'Layer1', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_1', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_18', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_19', ]
+#df_164$IMAGE.NAME = toupper(df_164$IMAGE.NAME)
+unique(df_164$IMAGE.NAME)
+```
+## Now we know that everything is equal to one another, we should load the variable
+
+```{r}
+image_names = unique(df_164$IMAGE.NAME)
+# Preset these variables to negative values so I can easily check if they were updated later
+df_164$X = -1
+df_164$Y = -1
+df_164$clump = NaN
+clump_header = '164_'
+clump_files = list.files(clump_dir)
+# set some normalization variables
+## This is the size of the image when the pixel values are taken from top left down
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 32
+TC_IMAGE_HEIGHT = 410
+TC_IMAGE_WIDTH = 446
+CC_IMAGE_HEIGHT= 422
+CC_IMAGE_WIDTH = 214
+
+# Load the dataframe with global and relative coordinates
+img_cords = read.table(file.path(meta_dir, '164_pixel_coordinates.csv'), sep = ',', header = TRUE)
+
+images = list.files(meta_dir)
+for(image_name in image_names){
+    if(grepl('408', image_name)){
+      next
+    }
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    
+    ## Get the clumps
+    filename = clump_files[grepl(clump_header, clump_files) & grepl(paste0(image_name, '_'),clump_files)]
+    if(length(filename != 0)){
+      clump_df = as.data.frame(t(read.csv(file.path(clump_dir, filename), header = FALSE)))
+      colnames(clump_df) = c('roi', 'cluster')
+      clump_df$roi = as.numeric(clump_df$roi)
+      
+      if(image_name == "CC_L2-1"){
+        coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+        if(38 %in% clump_df$roi){clump_df = clump_df[clump_df$roi != 38, ]}
+        clump_df$roi[clump_df$roi > 37] = clump_df$roi[clump_df$roi > 37] - 1
+      }
+      
+      image_idxs = which(df_164$IMAGE.NAME == image_name)
+      clump_df$roi_idxs = image_idxs[1] + clump_df$roi - 1
+      df_164[clump_df$roi_idxs, "clump"] = paste0(clump_header, image_name, '_', clump_df$cluster)
+    } else{
+      print('No clumps!')
+      print(image_name)
+    }
+    
+    if(cortex == 'CC'){ 
+      print(paste('cc', filename, image_name))
+      ## So if CC, we add the coordinates for TC_1 to overall image coordinates
+      x_adj = img_cords[img_cords$Name == 'TC_1', 'x'] + 
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'x']
+      ## Start from bottom, add the height, subtract TC_1 height, and then global CC1 to TC1
+      y_adj = TC_IMAGE_HEIGHT - img_cords[img_cords$Name == 'TC_1', 'y'] +
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'y'] + CC_IMAGE_HEIGHT
+    }else{
+      print(paste('tc', filename, image_name))
+      x_adj = 0
+      y_adj = TC_IMAGE_HEIGHT
+    }
+    
+    ## So don't do repelled for now
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    ## so the resized x distance is from left, so just add to the box location and adj
+    df_164[df_164$IMAGE.NAME == image_name, 'X'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + 
+                                                    img_cords[img_cords$Name == image_name, 'x'] + x_adj
+    ## resized y distance
+    df_164[df_164$IMAGE.NAME == image_name, 'Y'] = y_adj - img_cords[img_cords$Name == image_name, 'y'] - 
+                                                      (coordinates$Y_Coordinate_In_pixels / IMAGE_SIZE * 
+                                                      IMAGE_LEN)  
+}
+```
+
+
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_164) = 1:nrow(df_164)
+jy_164 = df_164 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X, Y, clump)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_164 <- NormalizeData(jy_164, scale.factor = 1e5) ###
+normed = GetAssayData(jy_164, slot = 'data')
+normed[normed < 3] = 0
+for(gene_name in rownames(jy_164)) {
+  mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+  #print(gene_name)
+  #print(mdn_gene_expr)
+  #normed[gene_name, normed[gene_name, ] < mdn_gene_expr] = 0
+}
+jy_164 <- SetAssayData(jy_164, slot = 'data', normed)
+```
+
+```{r}
+jy_164 <- FindVariableFeatures(jy_164, selection.method = "vst")
+all.genes <- rownames(jy_164)
+jy_164 <- ScaleData(jy_164, features = all.genes)
+jy_164 <- RunPCA(jy_164, approx = FALSE)
+jy_164 <- FindNeighbors(jy_164, dims = 1:30)
+jy_164 <- FindClusters(jy_164, resolution = 0.8)
+jy_164 <- RunUMAP(jy_164, dims = 1:30)
+jy_164$clump <- df_164$clump
+
+DimPlot(jy_164,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+```{r}
+DimPlot(jy_164,  reduction = "umap", group.by = 'clump') + NoAxes() + NoLegend()
+```
+
+```{r}
+unique(df_164$IMAGE.NAME)
+images_ordered = c('TC_Cortical3', 'TC_Cortical2', 'TC_Cortical1', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5', 'TC_4', 'TC_3', 'TC_2','TC_1','CC_2','CC_3',
+           'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10',
+           'CC_L2-1', 'CC_L2-2', 'CC_L2-3', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_164$X_horz = -1
+df_164$Y_horz = -1
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_164[df_164$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_164[df_164$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+```{r}
+hcoords = df_164 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_164[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_164))
+```
+
+
+```{r}
+jy_164<- RenameCells(jy_164, c(outer('164_', 1:ncol(jy_164), FUN=paste0)))
+jy_164$area = df_164$area
+jy_408<- RenameCells(jy_408, c(outer('408_', 1:ncol(jy_408), FUN=paste0)))
+jy_408$area = df_408$area
+jy_all <- merge(jy_164, jy_408)
+```
+```{r}
+jy_all <- NormalizeData(jy_all, scale.factor = 1e5) ###
+normed = GetAssayData(jy_all, slot = 'data')
+normed[normed < 3] = 0
+for(gene_name in rownames(jy_all)) {
+  if (gene_name == 'DCX'){
+    mdn_gene_expr = 0.5
+    print('skip dcx')
+  } else if (!gene_name %in% c('COUPTF2', 'SP8')){
+    mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+  }else{
+    mdn_gene_expr = quantile(normed[gene_name, normed[gene_name, ] > 0], .40)
+  }
+
+  normed[gene_name, normed[gene_name, ] < mdn_gene_expr] = 0
+}
+jy_all <- SetAssayData(jy_all, slot = 'data', normed)
+```
+
+```{r, fig.width=3, fig.height = 3}
+jy_all <- FindVariableFeatures(jy_all, selection.method = "vst")
+all.genes <- rownames(jy_all)
+jy_all <- ScaleData(jy_all, features = all.genes)
+jy_all <- RunPCA(jy_all, approx = FALSE)
+jy_all <- FindNeighbors(jy_all, dims = 1:30)
+jy_all <- FindClusters(jy_all, resolution = 0.5)
+jy_all <- RunUMAP(jy_all, dims = 1:30)
+
+DimPlot(jy_all,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+```{r}
+DimPlot(jy_all,  reduction = "umap", group.by = 'area') + NoAxes() # NoLegend()
+```
+```{r fig.width = 10, fig.height = 3}
+FeaturePlot(jy_all, c('CXCL12', 'CXCR4'), cells = which(FetchData(jy_all, 'GAD1') > 0), cols = c( '#F18F01', '#048BA8'), blend= TRUE) 
+```
+
+
+```{r}
+new.cluster.ids = c('CGE/LGE',
+                    'Ex',
+                    'TBR1+ CGE',
+                    'CALB2+DLX2+',
+                    'VIP+GAD1+',
+                    'SST+LHX6+',
+                    'MGE')
+
+```
+
+```{r}
+names(new.cluster.ids) <- levels(jy_all)
+jy_all <- RenameIdents(jy_all, new.cluster.ids)
+```
+## What are my nearest neighbors?
+
+## Let's just look at it simply. What do clusters look like?
+## What cell types are in those clusters?
+## Definitely a clump graph
+## Stacked barplots is a way to go
+```{r}
+plot_cluster_fraction <- function(sobj, clump_id){
+  all_idents = levels(Idents(sobj))
+  def_colors = hue_pal()(length(all_idents))
+  
+  clump_obj <- sobj[,sobj$clump == clump_id]
+  clstrs <- as.character(Idents(clump_obj))
+  clmp_ids <- clump_obj$clump
+  clmp_df <- as.data.frame(cbind(clstrs, clmp_ids))
+  cell_count = nrow(clmp_df)
+  colnames(clmp_df) <- c('cluster', 'clump')
+  
+  which_colors = def_colors[which(all_idents %in% clstrs)]
+
+  clmp_df %>% dplyr::count(clump, cluster) %>%
+    ggplot(aes(x="", y=n, fill=cluster))+ 
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+    ggtitle(paste0(clump_id, ', n=', cell_count)) +
+    scale_fill_manual(values = which_colors) +
+  theme_void()+ NoLegend() + theme(title = element_text(face = 'bold', size = rel(0.8), hjust = 1)) # remove background, grid, numeric labels
+}
+plot_cluster_fraction(jy_all, '164_CC_8_0')
+```
+```{r, fig.height=15, fig.width = 15}
+clmps = unique(jy_all$clump)
+plots <- lapply(1:length(clmps), function(i){
+    plot_cluster_fraction(jy_all, clmps[i])
+  })
+umaps = plot_grid(plotlist = plots, label_size = 3, nrow = 23)
+umaps
+```
+
+
+## try a stacked barplot
+```{r}
+aClumpDF <- as.data.frame(cbind(as.character(Idents(jy_all)), jy_all$clump, jy_all$area))
+colnames(aClumpDF) <- c('ctype', 'clump', 'area')
+
+g1 <- aClumpDF %>% filter(clump != NaN) %>%
+  dplyr::count(clump, ctype) %>% 
+ggplot(aes(clump, n, fill=ctype)) +
+  geom_bar(stat="identity")
+g2 <- aClumpDF %>% filter(clump == NaN) %>%
+  dplyr::count(clump, ctype) %>% 
+ggplot(aes(ctype, y = n, fill = ctype)) +
+  geom_bar(stat="identity") + RotatedAxis() + NoLegend()
+g2
+```
+```{r}
+aClumpDF %>% filter(clump != NaN) %>%
+  dplyr::count(clump, ctype) %>% 
+ggplot(aes(ctype, y = n, fill = ctype)) +
+  geom_bar(stat="identity") + RotatedAxis() + NoLegend()
+```
+```{r}
+## I want to summarize the ratio of nan to non-nan
+```
+
+```{r}
+aClumpDF %>% filter(clump != NaN) %>%
+  dplyr::count(ctype, area, clump) %>% 
+ggplot(aes(area, n, fill=ctype)) + RotatedAxis() +
+  geom_bar(stat="identity")
+```
+
+```{r}
+aClumpDF %>% filter(clump != NaN) %>%
+  dplyr::count(area, clump) %>%
+   ggplot(aes(area, n)) + 
+  geom_boxplot() + RotatedAxis()
+```
+
+
+```{r}
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+aClumpDF %>% group_by(clump) %>% mutate(top_ctype=Mode(ctype))
+aClumpDF$top_ctype <-  with(aClumpDF, ave(ctype, clump, FUN=Mode))
+aClumpDF$top_ctype
+```
+```{r, fig.height = 8, fig.width = 8}
+
+ 
+# Create data
+#clusters <- aClumpDF %>% filter(grepl('MS', area)) %>% dplyr::count(area, clump) %>% filter(clump != NaN)
+clusters <- aClumpDF %>% dplyr::count(ctype, clump) %>% filter(clump != NaN)
+ 
+# Generate the layout. This function return a dataframe with one line per bubble. 
+# It gives its center (x and y) and its radius, proportional of the value
+packing <- circleProgressiveLayout(clusters$n, sizetype='area')
+ 
+# We can add these packing information to the initial data frame
+clusters <- cbind(clusters, packing)
+ 
+# Check that radius is proportional to value. We don't want a linear relationship, since it is the AREA that must be proportionnal to the value
+# plot(data$radius, data$value)
+ 
+# The next step is to go from one center + a radius to the coordinates of a circle that
+# is drawn by a multitude of straight lines.
+clusters.gg <- circleLayoutVertices(packing, npoints=50)
+clusters.gg$idents <- rep(clusters$ctype, each=51)
+ 
+# Make the plot
+ggplot() + 
+  
+  # Make the bubbles
+  geom_polygon(data = clusters.gg, aes(x, y, group = id, fill=as.factor(idents)), colour = "black", alpha = 0.9) +
+  
+  # Add text in the center of each bubble + control its size
+  geom_text(data = clusters, aes(x, y, size=n, label = clump)) +
+  scale_size_continuous(range = c(1,3)) +
+  
+  # General theme:
+  theme_void() + 
+  theme(legend.position="none") +
+  coord_equal()
+```
+```{r}
+clump_meta <- data.frame()
+
+jy_clump = jy_all[, jy_all$clump!= NaN]
+tic()
+for(i in 1:ncol(jy_clump)){
+  # Iterate through the cells, get the neighbors for that particular cell
+  cell <- colnames(jy_clump[,i])
+  clump <- jy_clump[, jy_clump$clump == jy_clump$clump[i]]
+  neighbors <- clump@meta.data %>% filter(clump != cell)
+  probs = rep(0, length(levels(jy_all)))
+  neighbor_ids <- as.numeric(neighbors$seurat_clusters)
+  # Calculate the probability of each cluster type
+  for(j in 1:length(unique(neighbor_ids))){
+    j_class = unique(neighbor_ids)[j]
+    probs[j_class] = sum(neighbor_ids == j_class) / nrow(neighbors)
+  }
+
+  clump_meta <- rbind(clump_meta, probs)
+  colnames(clump_meta) <- c(outer('p', 1:length(levels(jy_all)), FUN=paste0))
+}
+toc()
+clump_meta
+```
+```{r}
+clumps <- as.data.frame(cbind(jy_clump@meta.data, clump_meta))
+```
+
+```{r, fig.height = 10, fig.width = 14}
+ref_cluster = 1
+plots = list()
+
+for(i in 1:length(levels(unique(clumps$seurat_clusters)))){
+  ref_cluster = i
+  plots[[i]] <- clumps %>%
+  filter(as.numeric(seurat_clusters) == ref_cluster) %>%
+  dplyr::select(c(seurat_clusters, p1, p2, p3, p4, p5, p6,p7,p8,p9,p10,p11,p12,p13)) %>%
+  pivot_longer(!seurat_clusters, names_to = "classes", values_to = "prob") %>%
+  ggplot(aes(x = prob, fill = factor(classes, levels = c(outer('p', 1:length(levels(jy_all)), FUN=paste0))))) + geom_boxplot(notch = FALSE) + 
+  ggtitle(paste(levels(jy_all)[ref_cluster], "vs other")) + scale_fill_discrete(name = 'subtypes', labels=levels(Idents(jy_all)))
+ }
+
+plot_grouped <- marrangeGrob(plots, nrow=2, ncol=2)
+ggsave(filename = 'cell_specific_clustering.pdf', path = file.path(output_dir_plot, '20220808_1'), plot_grouped, height = 10, width = 14, dpi = 150)
+```
+```{r}
+ref_cluster = 2
+
+clumps %>%
+  filter(cluster == ref_cluster) %>%
+  select(c(image, p0, p1, p2, p3, p4, p5, p6)) %>%
+  pivot_longer(!cluster, names_to = "classes", values_to = "prob") %>%
+  ggplot(aes(x = prob, color = classes)) + geom_boxplot() + 
+  ggtitle(paste("Cluster",as.character(ref_cluster-1), "vs other"))
+```
+
+```{r}
+pmat <- clumps %>%
+    group_by(seurat_clusters) %>%
+    dplyr::select(c(p1, p2, p3, p4, p5, p6,p7,p8,p9,p10,p11,p12,p13)) %>%
+    dplyr::summarise(across(everything(), list(mean))) %>%
+    dplyr::select(-seurat_clusters) %>%
+    as.matrix()
+
+rownames(pmat) <- levels(Idents(jy_all))
+colnames(pmat) <- rownames(pmat)
+```
+
+```{r fig.height = 8, fig.width = 8}
+pheatmap(pmat, color = turbo(n = 50))
+```
+
+```{r fig.height = 5, fig.width = 6}
+library("viridis")           # Load
+pheatmap(pmat,color = rocket(n = 50), cluster_rows = FALSE, cluster_cols = FALSE)
+```
+```{r}
+## I want to know the expression of different genes by the different areas
+## and clumps in those respective areas
+
+## So basically 4 plots, anterior dorsal, ventral, and posterior
+## Then need the clump name per thing-a-ma-bob
+## Clump versus no clump
+## differences between clumps (top_ctype per clump)
+```
+
+```{r}
+## Start with the barcharts
+
+plot_functional_genes <- function(sobj, group_key, group = 'area', fxn_gene_list = NULL) {
+  ## So I need to make a barchart with the average expression of the particular
+  ## gene list the I care about. This can be hardcoded... here?
+  if(is.null(fxn_gene_list)){
+    fxn_gene_list = c('VLDLR', 'LRP8', 'CXCR4', 'CXCR7', 'CXCL12', 'CXCL14', 'NCAM1')
+  }
+  sbset_obj = sobj[, sobj[[group]] == group_key]
+  ## I want to plot their "clumpedness," so really it's either clump or no clump as a group
+  gene_expr = as.data.frame(FetchData(sbset_obj, fxn_gene_list))
+  gene_expr$clump = sbset_obj$clump != "NaN"
+  gene_expr %>%
+    pivot_longer(!clump, names_to = 'gene', values_to = 'expr') %>%
+    ggplot(aes(x = gene, y = expr, fill = clump)) +
+    geom_boxplot() + theme_classic() + ggtitle(group_key) + RotatedAxis()
+}
+plot_functional_genes(jy_all, '164_TC')
+```
+```{r fig.height = 9, fig.width = 12}
+## For areas
+area_list = unique(jy_all$area)
+plots = list()
+plots <- lapply(1:length(area_list), function(i){
+    plot_functional_genes(jy_all, area_list[i])
+  })
+vlnplots = plot_grid(plotlist = plots, label_size = 3, nrow = 9)
+vlnplots
+#ggsave(filename = 'img_fxnal_gene_clumps.pdf', path = file.path(output_dir_plot, '20220817_1'), vlnplots, height = 9, width = 12, dpi = 150)
+```
+
+```{r fig.height = 18, fig.width = 12}
+## for images
+jy_all$image = c(df_164$IMAGE.NAME, df_408$IMAGE.NAME)
+image_list = unique(jy_all$image)
+plots = list()
+plots <- lapply(1:length(image_list), function(i){
+    plot_functional_genes(jy_all, image_list[i], group = 'image')
+  })
+bxplots = plot_grid(plotlist = plots, label_size = 3, nrow = 12)
+bxplots
+ggsave(filename = 'img_fxnal_gene_clumps.pdf', path = file.path(output_dir_plot, '20220817_1'), bxplots, height = 18, width = 12, dpi = 150)
+```
+
+```{r fig.height=6, fig.width = 8}
+plot_clump_expr <- function(sobj, clump_name, gene, pt_size = 8, IMAGE_SPECIFIC = FALSE) {
+
+  sbset_obj = sobj[, df_408$IMAGE.NAME == clump_name]
+  xy = Embeddings(sbset_obj, reduction = 'H')
+  #expmat  = as.character(Idents(sbset_obj))
+  expmat = FetchData(sbset_obj, gene)
+  df <- as.data.frame(cbind(xy, expmat))
+  colnames(df) <- c('x', 'y', 'ident')
+  ligands = c('CXCL12', 'CXCL14', 'RELN')
+  receptors = c('CXCR4', 'CXCR7', 'LRP8', 'VLDLR', 'EGFR')
+  maturity = c('VIP', 'SST')
+  adhesion = c('NCAM1')
+  immaturity = c('DCX')
+  disease = c('DCDC2', 'KIA0319')
+  
+  color_df = as.data.frame(rownames(sobj))
+  colnames(color_df) = 'gene'
+  color_df$color = '#0768FA'
+  color_df$color[color_df$gene %in% ligands] = '#FFFB46'
+  color_df$color[color_df$gene %in% receptors] = '#F26419'
+  color_df$color[color_df$gene %in% maturity] = '#450920'
+  color_df$color[color_df$gene %in% adhesion] = '#F42C04'
+  color_df$color[color_df$gene %in% immaturity] = '#0CF700'
+  color_df$color[color_df$gene %in% disease] = '#8FB356'
+  
+  
+  if (IMAGE_SPECIFIC){
+    title_name = clump_name
+  } else{
+    title_name = gene
+  }
+  
+  #colors = hue_pal()(length(levels(Idents(jy_all))))
+  #colors = colors[which(levels(Idents(jy_all)) %in% df$ident)]
+  colors = c('grey90', 'grey90', color_df$color[color_df$gene == gene])
+  df$x = as.numeric(df$x)
+  df$y = as.numeric(df$y)
+  df$clump = sbset_obj$clump
+  df$ident_label = as.character(round(df$ident, digits = 2))
+  df %>%
+    #ggplot(aes(x = x, y = y, color = clump)) +
+    #geom_point(size = 8) + theme_classic() + ggtitle(clump_name) + coord_fixed(ratio = 1) + NoAxes()  ## without cell type
+    #ggplot(aes(x = x, y = y, color = factor(ident, levels = levels(Idents(sobj))))) +
+    ggplot(aes(x = x, y = y, color = ident)) +
+    geom_point(size = pt_size) + theme_classic() + ggtitle(title_name) + coord_fixed(ratio = 1) + NoAxes() + #scale_color_manual(values = colors) +
+    geom_encircle(data = filter(df, clump != "NaN"), expand = 0.03,aes(group = clump) ) + scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3]) #+ geom_label_repel(data = filter(df, ident > 0), label = filter(df, ident > 0)[['ident_label']]) 
+  #+ scale_color_gradient(limits = c(0,11))
+
+}
+
+plot_clump_expr(jy_408, 'TC_9', 'GAD1')
+```
+
+
+```{r}
+plot_clump_clust <- function(sobj, clump_name, pt_size = 8) {
+
+  sbset_obj = sobj[, df_408$IMAGE.NAME == clump_name]
+  xy = Embeddings(sbset_obj, reduction = 'H')
+  #expmat  = as.character(Idents(sbset_obj))
+  expmat = FetchData(sbset_obj, gene)
+  df <- as.data.frame(cbind(xy, expmat))
+  colnames(df) <- c('x', 'y', 'ident')
+  
+  #colors = hue_pal()(length(levels(Idents(jy_all))))
+  #colors = colors[which(levels(Idents(jy_all)) %in% df$ident)]
+  colors = c('grey90', 'grey90', color_df$color[color_df$gene == gene])
+  df$x = as.numeric(df$x)
+  df$y = as.numeric(df$y)
+  df$clump = sbset_obj$clump
+  df %>%
+    ggplot(aes(x = x, y = y, color = clump)) +
+    geom_point(size = pt_size) + theme_classic() + ggtitle(clump_name) + coord_fixed(ratio = 1) + NoAxes() +  ## without cell type
+    #ggplot(aes(x = x, y = y, color = factor(ident, levels = levels(Idents(sobj))))) +
+    #ggplot(aes(x = x, y = y, color = ident)) +
+    #geom_point(size = 8) + theme_classic() + ggtitle(clump_name) + coord_fixed(ratio = 1) + NoAxes() + #scale_color_manual(values = colors) +
+    geom_encircle(data = filter(df, clump != "NaN"), expand = 0.03,aes(group = clump) )
+
+}
+
+plot_clump_clust(jy_408, 'TC_11')
+
+```
+
+```{r}
+plot_clump_celltype <- function(sobj, clump_name,  pt_size = 8) {
+
+  sbset_obj = sobj[, which(sobj$image == clump_name)]
+  xy = Embeddings(sbset_obj, reduction = 'H')
+  expmat  = as.character(Idents(sbset_obj))
+  #expmat = FetchData(sbset_obj, gene)
+  df <- as.data.frame(cbind(xy, expmat))
+  colnames(df) <- c('x', 'y', 'ident')
+  colors = hue_pal()(length(levels(Idents(jy_all))))
+  colors = colors[which(levels(Idents(jy_all)) %in% df$ident)]
+  #colors = c('grey90', 'grey90', color_df$color[color_df$gene == gene])
+  df$x = as.numeric(df$x)
+  df$y = as.numeric(df$y)
+  df$clump = sbset_obj$clump
+ # myplot <- 
+    df %>%
+    ggplot(aes(x = x, y = y, color = factor(ident, levels = levels(Idents(sobj))))) +
+    geom_point(size = pt_size) + theme_classic() +# ggtitle(clump_name) + 
+    coord_fixed(ratio = 1) + NoAxes() + scale_color_manual(values = colors, name = 'cluster') + 
+    geom_encircle(data = filter(df, clump != "NaN"), expand = 0.03,aes(group = clump) ) + xlim(0, 32) + ylim(525, 558) +   theme_cowplot() + NoAxes() + NoLegend()#+ 
+    #theme(legend.key.size=unit(0.1,'mm'),
+    #    legend.text=element_text(size=4),
+    #    legend.title=element_text(size=6))#+ scale_color_manual(values = colors, name = 'cluster', guide = guide_legend(override.aes = list(size=4))) +
+#+ scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3])
+  #+ scale_color_gradient(limits = c(0,11))
+  #return(myplot)
+}
+jy_408$clump = jy_all$clump_plot[(ncol(jy_164)+1):ncol(jy_all)]
+#jy_408$image = jy_all$image[(ncol(jy_164)+1):ncol(jy_all)]
+jy_164$clump = jy_all$clump_plot[1:ncol(jy_164)]
+#jy_164$image = jy_all$image[1:ncol(jy_164)]
+plot_clump_celltype(jy_408, 'TC_3', pt_size = 3)
+```
+
+```{r}
+dapi_img = image_read('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/test/408_tc3.tif')
+
+fig <- image_graph(width = 1024, height = 1024, res = 96)
+myplot <- plot_clump_celltype(jy_408, 'TC_3', pt_size = 3)
+dev.off()
+```
+```{r}
+dapi_img = image_read('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/test/408_tc3.tif')
+myplot <- plot_clump_celltype(jy_408, 'TC_3', pt_size = 5)
+ggdraw() +
+  draw_image(dapi_img) +
+  draw_plot(myplot, scale = 1.14)
+```
+
+```{r}
+normed = GetAssayData(jy_408, slot = "data")
+
+```
+
+
+```{r, fig.height = 18, fig.width = 12}
+## So the layout that I am going to want is...
+## there are 32 genes that I am interested in, so on one page ideally that will be 4 by 8
+## And then we can show the cell type
+jy_408$image = df_408$IMAGE.NAME
+jy_164$image = df_164$IMAGE.NAME
+plot_cluster_profile <- function(sobj, image, pt_size = 8){
+  genes = rownames(sobj)
+  plots = list()
+  plots <- lapply(1:length(genes), function(i){
+    plot_clump_expr(sobj, image, genes[i], pt_size = pt_size)
+  })
+  #plots = append(list(plot_clump_clust(sobj, image, pt_size = pt_size), plot_functional_genes(sobj, image, group = 'image'), plot_clump_celltype(sobj, image, pt_size = pt_size)), plots)
+  plots = append(list(plot_clump_clust(sobj, image, pt_size = pt_size), plot_functional_genes(sobj, image, group = 'image')), plots)
+  all_plots = plot_grid(plotlist = plots, label_size = 1, nrow = 9)
+  all_plots
+}
+
+
+#pdf("/home/aunoy/st/arc_profiling/st_analysis/results/plots/20220817_1/TC_clump_profiles.pdf", onefile = TRUE)
+for(image in unique(df_408$IMAGE.NAME)){
+  arranged = plot_cluster_profile(jy_408, image, pt_size = 5)
+  ggsave(filename = paste0(image, '_408_clump_profiles.pdf'), path = file.path(output_dir_plot, '20220822_1'), arranged, 
+         height = 18, width = 12)
+}
+#dev.off()
+
+## Final lines
+#marrangeGrob(plots, nrow=8, ncol=4)
+#ml <- marrangeGrob(plots, nrow=2, ncol=2)
+```
+
+
+```{r, fig.height = 18, fig.width = 18}
+plots = list()
+plots <- lapply(1:length(unique(df_408$IMAGE.NAME)), function(i){
+  plot_clump_expr(jy_408, unique(df_408$IMAGE.NAME)[i], 'COUPTF2', pt_size = 8, IMAGE_SPECIFIC = TRUE)
+})
+all_plots = plot_grid(plotlist = plots, label_size = 1, nrow = 6)
+all_plots
+ggsave(filename = paste0('408_COUPTF2_clump_profiles.pdf'), path = file.path(output_dir_plot, '20220823_1'), all_plots, 
+         height = 18, width = 18)
+```
+```{r}
+sum(FetchData(jy_all, 'GAD1') != 0) / sum(FetchData(jy_all, 'GAD1') == 0)
+```
+
+```{r fig.height = 3, fig.width = 4.5}
+DimPlot(jy_all) + NoAxes()
+```
+
+
+```{r}
+FeaturePlot(jy_all, cells = which(Idents(jy_all) == 'VIP+GAD1+'), c('COUPTF2', 'SP8', 'PROX1', 'DLX2'), cols = c('lightgrey', hue_pal()(9)[5]))
+```
+```{r}
+FeaturePlot(jy_all, cells = which(Idents(jy_all) == 'VIP+GAD1+'), c('VIP', 'LHX6', 'NKX2.1', 'GAD1'), cols = c('lightgrey', hue_pal()(9)[5]))
+```
+
+
+```{r}
+FeaturePlot(jy_all,  c('COUPTF2', 'SP8', 'PROX1', 'DLX2'), cols = c('lightgrey', hue_pal()(9)[5]))
+```
+
+```{r}
+FeaturePlot(jy_all, c('NKX2.1', 'LHX6', 'MAF1', 'GAD1'), cols = c('lightgrey', hue_pal()(9)[9]))
+```
+
+```{r}
+FeaturePlot(jy_all, c('TSHZ1', 'GSX2', 'GAD1'), cols = c('lightgrey', hue_pal()(9)[1]))
+```
+
+```{r fig.height = 3, fig.width = 4}
+FeaturePlot(jy_all, 'DCX', cols = c('lightgrey', 'green')) + NoAxes() + NoLegend()
+```
+```{r fig.height = 6, fig.width = 15}
+FeaturePlot(jy_all,  c('LHX6', 'SST'), cols = c('lightgrey', hue_pal()(7)[6]), split.by = 'area', by.col = TRUE)
+```
+```{r fig.height = 2, fig.widgth = 3}
+genes = c('LHX6', 'SST')
+plots <- lapply(1:length(genes), function(i){
+    plot_features_umap(jy_all, genes[i], pt.size = 0.8, alpha = 1, color = hue_pal()(7)[6])
+  })
+umaps = plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+umaps
+```
+```{r fig.height = 6, fig.width = 12}
+DimPlot(jy_all, split.by = 'area', ncol = 3)
+```
+
+```{r fig.width = 10, fig.height = 2}
+FeaturePlot(jy_all, c('TBR1', 'COUPTF2'), cols = c('#F18F01', '#048BA8'), blend= TRUE) 
+```
+```{r fig.width = 10, fig.height = 3}
+FeaturePlot(jy_all, c('VIP', 'SST'), cols = c( '#F18F01', '#048BA8'), blend= TRUE) 
+```
+
+```{r fig.width = 10, fig.height = 3}
+FeaturePlot(jy_all, c('TBR1', 'COUPTF2'), cols = c( '#F18F01', '#048BA8'), blend= TRUE) 
+```
+
+```{r fig.width = 10, fig.height = 6}
+DimPlot(jy_all, split.by = 'area', ncol = 3) 
+```
+```{r fig.width = 18, fig.height = 5}
+FeaturePlot(jy_all, features = c('GAD1', 'DLX2'), split.by = 'area', by.col = TRUE) 
+```
+
+```{r}
+jy_all
+```
+
+## Tree
+```{r}
+breakpoints = 1:40/20
+i = 1
+res_str = 'clust_tree_res.'
+norm_str = 'RNA_snn_res.'
+for (breakpoint in breakpoints){
+  jy_all <- FindClusters(jy_all, resolution = breakpoint, verbose = FALSE)
+  jy_all[[paste0(res_str, breakpoint)]] = jy_all[[paste0(norm_str, breakpoint)]]
+}
+```
+
+```{r fig.height = 15, fig.width = 10}
+library(clustree)
+clustree(jy_all, prefix = res_str)
+```
+
+```{r fig.width = 15, fig.height = 4}
+DotPlot(jy_all, features = all.genes) + RotatedAxis()
+```
+```{r fig.width = 8, fig.height = 2}
+DotPlot(jy_all, features = all.genes, group.by = 'broad_areas') + RotatedAxis()
+```
+
+```{r}
+DimPlot(jy_all, split.by = 'broad_areas', ncol = 2)
+```
+
+```{r fig.width = 1.5, fig.height =1}
+DimPlot(jy_all, group.by = 'broad_areas') + NoAxes()
+```
+
+```{r}
+XY_164 %>%
+  ggplot(aes(x = pixel_1, y = pixel_2)) + geom_point() + x
+```
+

@@ -1,0 +1,1148 @@
+---
+title: "st_dist"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+Dec 25th, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+library(png)
+library(cowplot)
+library(magick)
+library(scales)
+library(packcircles)
+library(ggalt)
+library(cccd)
+library(stringr)
+library(ggfortify)
+library(circlize)
+library(reshape2)
+library(igraph)
+library(ggpubr)
+library(ggstatsplot)
+library(rstatix)
+#library("leiden")
+source("/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/src/st_functions.R", echo=FALSE)
+```
+
+## Load the data
+```{r}
+data_dir = '/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+clump_dir = '/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/hand_annotated_data/clumps'
+meta_dir = '/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/hand_annotated_data/overlay'
+output_dir_plot = '/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/results/tables'
+```
+
+### plot the meta data real quick
+```{r}
+meta_ntrscts = read.csv(file.path(clump_dir, 'meta', 'META_ntrsct.csv'), header = FALSE) %>%
+  as_tibble()
+```
+
+### Load the data
+```{r}
+df_408 <- load_slice(slice = "408")
+df_408 <- clean_408(df_408)
+df_408 <- embed_horizontal_408(df_408)
+rownames(df_408) = 1:nrow(df_408)
+jy_408 = df_408 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X_horz, Y_horz, clump)) %>%
+  t() %>%
+  CreateSeuratObject()
+jy_408$image <- df_408$IMAGE.NAME
+jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
+normed = GetAssayData(jy_408, slot = 'data')
+normed[normed < 3] = 0
+#for(gene_name in rownames(jy_408)) {
+#  mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+#}
+jy_408 <- SetAssayData(jy_408, slot = 'data', normed)
+jy_408 <- FindVariableFeatures(jy_408, selection.method = "vst")
+all.genes <- rownames(jy_408)
+jy_408 <- ScaleData(jy_408, features = all.genes)
+jy_408 <- RunPCA(jy_408, approx = FALSE)
+jy_408 <- FindNeighbors(jy_408, dims = 1:30)
+jy_408 <- FindClusters(jy_408, resolution = 0.8)
+jy_408 <- RunUMAP(jy_408, dims = 1:30)
+jy_408$clump = df_408$clump
+hcoords = df_408 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_408))
+
+df_164 <- load_slice(slice = "164")
+df_164 <- clean_164(df_164)
+df_164 <- embed_horizontal_164(df_164)
+
+rownames(df_164) = 1:nrow(df_164)
+jy_164 = df_164 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X, Y, clump)) %>%
+  t() %>%
+  CreateSeuratObject()
+jy_164$image = df_164$IMAGE.NAME
+
+jy_164 <- NormalizeData(jy_164, scale.factor = 1e5) ###
+normed = GetAssayData(jy_164, slot = 'data')
+normed[normed < 3] = 0
+#for(gene_name in rownames(jy_164)) {
+#  mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+#}
+jy_164 <- SetAssayData(jy_164, slot = 'data', normed)
+
+jy_164 <- FindVariableFeatures(jy_164, selection.method = "vst")
+all.genes <- rownames(jy_164)
+jy_164 <- ScaleData(jy_164, features = all.genes)
+jy_164 <- RunPCA(jy_164, approx = FALSE)
+jy_164 <- FindNeighbors(jy_164, dims = 1:30)
+jy_164 <- FindClusters(jy_164, resolution = 0.8)
+jy_164 <- RunUMAP(jy_164, dims = 1:30)
+jy_164$clump <- df_164$clump
+
+unique(df_164$IMAGE.NAME)
+images_ordered = c('TC_Cortical3', 'TC_Cortical2', 'TC_Cortical1', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5', 'TC_4', 'TC_3', 'TC_2','TC_1','CC_2','CC_3',
+           'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_9', 'CC_8', 'CC_10',
+           'CC_L2-1', 'CC_L2-2', 'CC_L2-3', 'CC_Cortical1', 'CC_Cortical2')
+
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_164$X_horz = -1
+df_164$Y_horz = -1
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_164[df_164$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_164[df_164$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+
+hcoords = df_164 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_164[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_164))
+
+jy_164<- RenameCells(jy_164, c(outer('164_', 1:ncol(jy_164), FUN=paste0)))
+jy_164$area = df_164$area
+jy_408<- RenameCells(jy_408, c(outer('408_', 1:ncol(jy_408), FUN=paste0)))
+jy_408$area = df_408$area
+jy_all <- merge(jy_164, jy_408)
+
+jy_all <- NormalizeData(jy_all, scale.factor = 1e5) ###
+normed = GetAssayData(jy_all, slot = 'data')
+normed[normed < 3] = 0
+for(gene_name in rownames(jy_all)) {
+  if (gene_name == 'DCX'){
+    mdn_gene_expr = 0.5
+    print('skip dcx')
+  } else if (!gene_name %in% c('COUPTF2', 'SP8')){
+    mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+  }else{
+    mdn_gene_expr = quantile(normed[gene_name, normed[gene_name, ] > 0], .40)
+  }
+
+  normed[gene_name, normed[gene_name, ] < mdn_gene_expr] = 0
+}
+jy_all <- SetAssayData(jy_all, slot = 'data', normed)
+
+jy_all <- FindVariableFeatures(jy_all, selection.method = "vst")
+all.genes <- rownames(jy_all)
+jy_all <- ScaleData(jy_all, features = all.genes)
+jy_all <- RunPCA(jy_all, approx = FALSE)
+jy_all <- FindNeighbors(jy_all, dims = 1:30)
+jy_all <- FindClusters(jy_all, resolution = 0.5)
+jy_all <- RunUMAP(jy_all, dims = 1:30)
+
+new.cluster.ids = c('CGE/LGE',
+                    'Ex',
+                    'TBR1+ CGE',
+                    'CALB2+DLX2+',
+                    'VIP+GAD1+',
+                    'SST+LHX6+',
+                    'MGE')
+
+names(new.cluster.ids) <- levels(jy_all)
+jy_all <- RenameIdents(jy_all, new.cluster.ids)
+```
+
+```{r}
+## Kind of simple
+## For each image, make a graph, and then ha
+group_1_flag <- Idents(jy_all) == 'CGE/LGE' & FetchData(jy_all, 'TSHZ1') > 3
+group_2_flag <- Idents(jy_all) == 'CGE/LGE' & FetchData(jy_all, 'TSHZ1') < 3
+
+jy_all$my_compar <- '0'
+jy_all$my_compar[group_1_flag] <- '1'
+jy_all$my_compar[group_2_flag] <- '2'
+
+markers <- FindMarkers(jy_all, ident.1 = '1', ident.2 = '2', group.by = 'my_compar')
+```
+
+```{r}
+jy_all$slice <- 'err'
+
+jy_all$slice[1:ncol(jy_164)] <- '164'
+jy_all$slice[(ncol(jy_164)+1):ncol(jy_all)] <- '408'
+
+jy_all$image_slice <- paste0(jy_all$slice, '_', jy_all$image)
+```
+
+```{r}
+h_all <- rbind(Embeddings(jy_164, "H"), Embeddings(jy_408, "H"))
+rownames(h_all) <- colnames(jy_all)
+
+all_embed <-CreateDimReducObject(embeddings = h_all, key = "pixel_", assay = DefaultAssay(jy_all))
+jy_all[["H"]] <- all_embed
+```
+
+```{r}
+jy_all <- ProjectDim(jy_all, reduction = "H")
+```
+```{r}
+fimage <- jy_all$image_slice[1]
+test_image <- jy_all[, which(jy_all$image_slice == fimage)]
+```
+
+```{r}
+test_embed <- Embeddings(test_image, 'H')
+d_mat <- dist(test_embed, diag = TRUE, upper = TRUE)
+net <- graph_from_adjacency_matrix(as.matrix(d_mat), mode = "undirected", weighted = TRUE)
+```
+```{r}
+net <- simplify(net, remove.multiple = F, remove.loops = T)
+plot(net)
+```
+```{r}
+hist(E(net)$weight)
+```
+### What do we want to know?
+Slice
+Stream
+Cortical
+
+All we need is the image basically
+
+```{r}
+dmat_df <- as.data.frame(cbind(E(net)$weight, fimage))
+colnames(dmat_df) <- c("dist", "image")
+dmat_df$dist <- as.numeric(dmat_df$dist)
+```
+
+```{r}
+dmat_df %>%
+  ggplot(aes(x = dist)) + geom_histogram()
+```
+```{r}
+dist_df <- get_dist_df(jy_all)
+```
+
+```{r fig.width = 15, fig.height = 3}
+dist_df %>%
+  ggplot(aes(x = image, y = dist)) + geom_violin() + RotatedAxis()
+```
+
+## What percentage of cells are in each image?
+
+```{r}
+dms <- jy_all[, grepl("408", jy_all$area) & grepl("MS_TC", jy_all$area)]
+#dms <- jy_all[, grepl("MS_CC", jy_all$area)]
+
+record <- as.data.frame(zeros(1, length(levels(Idents(jy_all)))))
+colnames(record) <- levels(Idents(jy_all))
+
+for(img in unique(dms$image)){
+  tbl <- table(Idents(dms[, dms$image == img]))
+  #print(tbl)
+  record[, names(tbl)] <-  record[, names(tbl)] + 1
+}
+```
+
+```{r}
+cc_record <- record
+```
+
+```{r}
+length(unique(dms$image))
+```
+MS CC = 11
+MS PC = 10
+MS TC = 15
+
+```{r}
+hist(as.numeric(pc_record[1, ]) / 10, breaks = 10)
+```
+
+
+```{r}
+vms_labels <- c(paste0("164_", antr_TC_MS), paste0("408_", post_TC_MS))
+dms_labels <- c(paste0("164_", antr_CC_MS), paste0("408_", post_CC_MS))
+cc_labels <- c(paste0("164_", antr_CC_Cx), paste0("408_", post_CC_Cx))
+tc_labels <- c(paste0("164_", antr_TC_Cx), paste0("408_", post_TC_Cx))
+```
+
+```{r}
+dist_df$region <- 'error'
+dist_df$region[which(dist_df$image %in% vms_labels)] = 'VMS'
+dist_df$region[which(dist_df$image %in% dms_labels)] = 'DMS'
+dist_df$region[which(dist_df$image %in% tc_labels)] = 'VCx'
+dist_df$region[which(dist_df$image %in% cc_labels)] = 'DCx'
+```
+
+```{r}
+my_comparisons <- list( c("VMS", "DMS"))
+dist_df %>%
+  ggplot(aes(x = region, y = dist, color = region)) + geom_boxplot() + RotatedAxis() +   stat_compare_means(comparisons = my_comparisons)
+```
+
+```{r}
+quantile(dist_df$dist)
+```
+
+```{r}
+### Instead of a df, I think it might be better to get a graph here
+g <- get_dist_graph(jy_all, verbose = FALSE)
+V(g)$image_slice <- jy_all$image_slice
+```
+```{r}
+E(g)[from("164_64_64")]$weight
+```
+```{r}
+g1 <- get_dist_graph(jy_all, "164_CC_8")
+```
+```{r}
+dd <- E(g1)[from("164_37_37")]
+```
+
+```{r}
+get_dist_interactions(g1, jy_all, classes, c_df)
+```
+
+```{r}
+
+get_dist_interactions <- function(g, obj, classes, c_df, px_thr = 7){
+    c_df$val = 0
+    for(i in 1:length(V(g))){
+      cell_name = V(g)[i]$name
+      class_cell = Idents(obj)[which(colnames(obj) == cell_name)]
+      ## Get the cells that are the same
+      edge_obj <- E(g)[from(cell_name)]
+      edge_dists <- edge_obj$weight
+      itrct_ix <- edge_dists <= px_thr
+      itrcts = as.data.frame(ends(g, edge_obj, 
+                                  names = TRUE))[['V2']][which(itrct_ix)]
+      neighbor_idents = Idents(obj)[which(colnames(obj) %in% itrcts)]
+      for(neighbor in neighbor_idents){
+        value = c_df$val[which(c_df$c1 == class_cell & c_df$c2 == neighbor)]
+        c_df$val[which(c_df$c1 == class_cell & c_df$c2 == neighbor)] = value + 1
+      }
+    }
+    return(c_df)
+}
+### Iterate through all images
+### run 100 permutations, and get the p value from the real data
+permutations = 99
+neighbors = 5
+threshold = 4
+
+## IMages
+imgs <- unique(jy_all$image_slice)
+
+### Need to set up the dataframe
+classes <- levels(Idents(jy_all))
+n = length(classes)
+c1 = rep(classes, n)
+c2 = rep(classes, each=n)
+c_df <- as.data.frame(cbind(c1, c2))
+
+## will save all into 2 different matrices
+interaction_mat <- matrix(-1, nrow(c_df), length(imgs)) 
+avoidance_mat <- matrix(-1, nrow(c_df), length(imgs)) 
+
+## Need to create a jy_all embedding
+embed_164 <- Embeddings(jy_164, "H")
+embed_408 <- Embeddings(jy_408, "H")
+jy_all[["H"]] <- CreateDimReducObject(embeddings = rbind(embed_164, embed_408), key = "pixel_", assay = DefaultAssay(jy_all))
+
+for(i in 1:length(imgs)){
+  print(paste("Permuting image", i, "of", length(imgs)))
+  img <- imgs[i]
+  obj <- jy_all[, which(jy_all$image_slice == img)]
+  ### Create nn graph for real
+  interaction_graph <- get_dist_graph(obj, img)
+  ### Iterate through each cell type
+  ### Compute the mean for this one
+  data_cts <- get_dist_interactions(interaction_graph, obj, classes, c_df, threshold)
+  obj_idents <- Idents(obj)
+  perm_matrix = matrix(NA, nrow(c_df), permutations)
+  for(permutation in 1:permutations){
+    Idents(obj) <- sample(Idents(obj))
+    perm_cts <- get_dist_interactions(interaction_graph, obj, classes, c_df)
+    perm_matrix[, permutation] <- perm_cts$val
+  }
+  interaction_mat[, i] <- rowSums(perm_matrix <= data_cts$val) / (permutations + 1)
+  avoidance_mat[, i] <- rowSums(perm_matrix >= data_cts$val) / (permutations + 1)
+  ## count the identities
+  tbl <- table(Idents(obj))
+  ## If the cell type does not exist in the image, do not count the P value for the
+  ## interaction... obviously
+  nonexist_ixs <- which(!(c_df$c1 %in% names(tbl)) | !(c_df$c2 %in% names(tbl)))
+  interaction_mat[nonexist_ixs, i] <- NA
+  avoidance_mat[nonexist_ixs, i] <- NA
+}
+```
+```{r}
+## Save this difficultly made files
+saveRDS(interaction_mat, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/', 'interaction_dmat_4px.rds'))
+saveRDS(avoidance_mat, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/', 'avoidance_dmat_4px.rds'))
+```
+
+```{r}
+interaction_mat <- readRDS(file.path('/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/hand_annotated_data/', 'interaction_dmat_4px.rds'))
+avoidance_mat <- readRDS(file.path('/wynton/group/paredes/Aunoy/spatial/arc_profiling/st_analysis/hand_annotated_data/', 'avoidance_dmat_4px.rds'))
+```
+
+
+```{r}
+rownames(interaction_mat) <- paste0(c_df$c1, "->", c_df$c2)
+rownames(avoidance_mat) <- paste0(c_df$c1, "->", c_df$c2)
+colnames(interaction_mat) <- imgs
+colnames(avoidance_mat) <- imgs
+```
+
+
+```{r}
+plot_map <- interaction_mat
+plot_map[which(plot_map >= 0.05)] = 1
+pheatmap(plot_map, cluster_cols = FALSE, cluster_rows = FALSE, cex = 0.8,
+         cell_width = 5, cell_height = 5)
+```
+
+```{r}
+pheatmap(plot_map[, pc_labels], cluster_cols = FALSE, cluster_rows = FALSE, cex = 0.8,
+         cell_width = 5, cell_height = 5)
+```
+
+
+```{r}
+sum(interaction_mat < 0.05, na.rm = TRUE)
+```
+
+```{r}
+min(rowMeans(interaction_mat, na.rm = TRUE))
+```
+
+```{r}
+rownames(avoidance_mat) <- paste0(c_df$c1, "->", c_df$c2)
+colnames(avoidance_mat) <- imgs
+rownames(interaction_mat) <- paste0(c_df$c1, "->", c_df$c2)
+colnames(interaction_mat) <- imgs
+```
+
+
+## So with layout, we have a couple of factors that we want to clean up
+
+There are
+- Nodes
+- Edges
+
+Node Size
+Node Color
+- Cell type
+Edge Size
+- Interaction score?
+Edge Color
+- Maybe better just color
+
+We have a couple of things in the data
+Cell Type - X
+Interaction score
+Interaction prevalence
+Avoidance score
+Avoidance prevalence
+Self-Interaction
+
+## Need to visualize how many are present
+```{r}
+## Need to look at each image, how many non-nans there are
+pc_list <- rowSums(!is.na(plot_map[, pc_labels])) / size(plot_map[, pc_labels], 2)[rowSums(!is.na(plot_map[, pc_labels])) / size(plot_map[, pc_labels], 2) >=0.9]
+```
+
+
+```{r}
+layouts = c(layout_with_dh,
+            layout_with_drl,
+            layout_nicely,
+            layout_with_fr,
+            layout_with_graphopt,
+            layout_with_lgl,
+            layout_with_gem
+            )
+layout_names = c('dh', 'drl', 'nicely', 'fr', 'graphopt', 'lgl', 'gem')
+```
+
+```{r}
+# Function to plot color bar
+color.bar <- function(lut, min, max=-min, nticks=11, ticks=seq(min, max, len=nticks), title='') {
+    scale = (length(lut)-1)/(max-min)
+
+    dev.new(width=1.75, height=5)
+    plot(c(0,10), c(min,max), type='n', bty='n', xaxt='n', xlab='', yaxt='n', ylab='', main=title)
+    axis(2, ticks, las=1)
+    for (i in 1:(length(lut)-1)) {
+     y = (i-1)/scale + min
+     rect(0,y,10,y+1/scale, col=lut[i], border=NA)
+    }
+}
+```
+
+```{r, fig.height = 5, fig.width = 6}
+plot_ig <- function(g, lt_fxn, lt_name, stream){
+  return(plot(g, layout=lt_fxn(net), main= paste(stream, lt_name)))
+}
+
+vms_labels <- c(paste0("164_", antr_TC_MS), paste0("408_", post_TC_MS))
+dms_labels <- c(paste0("164_", antr_CC_MS), paste0("408_", post_CC_MS))
+
+vms_scores <- matrix(0, 1, length(classes))
+dms_scores <- matrix(0, 1, length(classes))
+colnames(vms_scores) <- classes
+colnames(dms_scores) <- classes
+
+streams = c('PirC', 'dms', 'TC')
+presence_threshold = 0.9
+sig_threshold = 0.3
+
+for(stream in streams){
+
+  if(stream == 'dms'){
+    stream_labels = dms_labels
+    classes_to_keep = c()
+  } else if(stream == 'PirC'){
+    stream_labels = vms_labels[grepl("164", vms_labels)]
+    classes_to_keep = c("CGE/LGE")
+} else{
+    stream_labels = vms_labels[grepl("408", vms_labels)]
+    classes_to_keep = c("CGE/LGE", "TBR1+ CGE")
+  }
+
+  sub_mat <- interaction_mat[, stream_labels]
+  avgs <- rowMeans(sub_mat < 0.05, na.rm = TRUE)
+  
+  interaction_df <- c_df %>% add_column(value = avgs)
+  colnames(interaction_df) <- c('from', 'to', 'value')
+  mat <- dcast(interaction_df, from ~ to, value.var = "value") %>%
+    column_to_rownames("from") %>%
+    #mutate_all(.funs = readr::parse_number) %>%
+    as.matrix() 
+  net <- graph_from_adjacency_matrix(mat, mode = "directed", weighted = TRUE)
+  
+  #### Get correct positions
+  class_ixs <- c()
+  for(class in V(net)$name ){
+    class_ixs <- c(class_ixs, which(classes == class))
+  }
+  
+  V(net)$color <- get_cluster_colors(V(net)$name)
+  
+  #net <- simplify(net, remove.loops = TRUE)
+  
+  ## Assign, first only connections with at least 90% appearance
+  ## Then, show with 30% significant
+  presence_perc <- rowSums(!is.na(sub_mat)) / length(stream_labels)
+  present_itrc <- presence_perc[which(presence_perc >= presence_threshold)]
+  if(length(present_itrc) < 2){
+  final_w <- sum(sub_mat[names(present_itrc),] < 0.05, na.rm = TRUE) / 
+    sum(!is.na(sub_mat[names(present_itrc),]))    
+    names(final_w) <- names(present_itrc)
+  } else{
+  final_w <- rowSums(sub_mat[names(present_itrc),] < 0.05, na.rm = TRUE) / 
+    rowSums(!is.na(sub_mat[names(present_itrc),]))
+  }
+  
+  
+  #if(all(colnames(sub_mat) == vms_labels)){
+  #  size_scores = vms_scores
+  #} else{ size_scores = dms_scores}
+  
+  sw <- c()
+  #for(vertex in V(net)$name){
+  #  wt <- E(net)[from(vertex) & to(vertex)]$weight
+  #  if(length(wt) == 0){
+  #    sw <- c(sw, 0)
+  #  } else{
+  #  sw <- c(sw, E(net)[from(vertex) & to(vertex)]$weight)
+  #  }
+  #}
+  ## First one sets up sizes as interactions, but that's less important
+  tbl <- table(Idents(jy_all[, jy_all$image_slice %in% stream_labels]))
+  for(cell_type in names(V(net))){
+    if(cell_type == "MGE" && !"MGE"%in% names(tbl)){
+      V(net)[cell_type]$size = 0
+    } else{
+      V(net)[cell_type]$size = tbl[[cell_type]]
+    }
+  }
+  V(net)$size <- V(net)$size / 5
+  true_zeros = V(net)$size == 0
+  V(net)$size <- V(net)$size + 10
+  V(net)$size[true_zeros] <- 0
+  #V(net)$size <- avgs[seq(1, nrow(interaction_mat), 8)][class_ixs]*70 + 12
+  ### So I need to get the self weight essentially
+  
+  # The labels are currently node IDs.
+  # Setting them to NA will render no labels:
+  
+  ### First one sets the label size based on self interaction, now it's based on interaction
+  #V(net)$label.cex <- avgs[seq(1, nrow(interaction_mat), 8)][class_ixs] + 1 ## Flipped
+  #V(net)$label.cex <- size_scores[,V(net)$name] / 600 * 2 + 1
+  V(net)$label.dist <- 3
+  V(net)$frame.width = 2
+  V(net)$frame.color = "black"
+  V(net)$label.family = 'sans'
+  V(net)$label <- NA
+  
+  # Set edge width based on weight:
+  ## Filter out edges
+  #net <- delete.edges(net,E(net)[which(E(net)$weight < 0.3)])
+  #class_to_del = levels(Idents(jy_all))[!(levels(Idents(jy_all)) %in% classes_to_keep)]
+  #net <- delete.edges(net, E(net)[.from(class_to_del) | .to(class_to_del)])
+  #if(stream == 'TC'){
+  #  net <- delete.edges(net, E(net)[.from('TBR1+ CGE') & .to('TBR1+ CGE')])
+  #}
+  E(net)$weight = 0
+  for(i in 1:length(final_w)){
+    vs = str_split(names(final_w[i]), "->")
+    v1 = vs[[1]][1]
+    v2 = vs[[1]][2]
+    E(net)[.from(v1) & .to(v2)]$weight <- final_w[i]
+  }
+  net <- delete.edges(net, E(net)[E(net)$weight == 0])
+  ## Color the weights
+  palf <- colorRamp(c(rgb(0,0,1, 1),rgb(1,0,0, 1)), alpha=FALSE)
+  edge_cols <- palf(E(net)$weight)
+  #edge_cols[which(is.nan(edge_cols)[, 1]), ] = 0
+  #E(net)$color <- rgb(edge_cols, maxColorValue = 255)
+  
+  E(net)$width <- E(net)$weight*10
+
+  print(paste(min(E(net)$weight), max(E(net)$weight)))
+  
+  
+  #change arrow size and edge color:
+  E(net)$arrow.size <- 0.5
+  #E(net)$edge.color <- "Red"
+  if(stream == "PirC"){
+    pirnet = net
+  }
+  
+  if(stream == "TC"){
+    tcnet = net
+  }
+  # We can even set the network layout:
+  #coords <- layout_(net, nicely())
+  plot(net, layout=final_layout, main=stream)
+  #par(mfrow=c(3,3))
+  #lapply(1:length(layouts), function(i){
+  #  plot_ig(net, layouts[[i]], layout_names[[i]], stream)
+  #})
+  #if(stream == 'dms'){
+  #  final_layout <- layout_(net, nicely())
+  #}
+  #image.plot(legend.only=T, zlim=c(0.3, 0.9), col=colorRampPalette(c("black", "purple", "yellow"))(100))
+}
+```
+```{r fig.height = 5, fig.width = 5}
+#ig.layout <- layout_nicely(vnet)
+plot(vnet, layout=ig.layout, main="vms", rescale = TRUE, edge.lty= E(vnet))
+rownames(ig.layout) <- V(vnet)$name
+plot(net, layout=ig.layout[V(net)$name,], main="dms", edge.lty= E(net), rescale = TRUE)
+```
+## We need to have rules for this
+
+1) Show up in at least.. some percent of images?
+2) Have at least... some number of cells? Even if they are showing up
+
+```{r}
+dnet <- delete.vertices(tcnet, 'MGE')
+ig.layout <- layout_nicely(dnet)
+plot(dnet, layout=ig.layout, main="MS_TC", rescale = TRUE, edge.lty= E(dnet))
+rownames(ig.layout) <- V(dnet)$name
+#plot(net, layout=ig.layout[V(net)$name,], main="dms", edge.lty= E(net), rescale = TRUE)
+```
+
+```{r}
+plot(tcnet, layout=ig.layout, main="MS_TC", rescale = TRUE, edge.lty= E(tcnet))
+```
+
+
+```{r}
+img = '408_TC_3'
+g1 <- get_dist_graph(jy_all, img)
+im <- get_dist_interactions(g1, jy_all, classes, c_df, 4)
+```
+
+```{r}
+obj <- jy_all[, which(jy_all$image_slice == img)]
+### Create nn graph for real
+XY_obj = Embeddings(obj, 'H')
+g1=delete.edges(g1, which(E(g1)$weight > 4)) # here's my condition.
+```
+```{r}
+lo <- layout.norm(as.matrix(XY_obj))
+plot.igraph(g1, 
+    layout = lo,
+    resize = FALSE) 
+```
+
+```{r}
+vms_mat <- interaction_mat[, vms_labels]
+dms_mat <- interaction_mat[, dms_labels]
+
+res <- prop.test(x = c(sum(vms_mat[1, ] < 0.05), sum(dms_mat[1, ] < 0.05)), 
+                 n = c(sum(vms_mat[1, ] >= 0.05), sum(dms_mat[1, ] >= 0.05)))
+# Printing the results
+res 
+```
+```{r}
+tbl <- rbind(c(sum(vms_mat[1, ] < 0.05, na.rm = TRUE), sum(dms_mat[1, ] < 0.05, na.rm = TRUE)), 
+              c(sum(vms_mat[1, ] >= 0.05, na.rm = TRUE), sum(dms_mat[1, ] >= 0.05, na.rm = TRUE)))
+fisher.test(tbl)
+```
+```{r}
+rownames(tbl) <- c('hmg', 'htr')
+colnames(tbl) <- c('vms', 'dms')
+
+mosaicplot(tbl,
+  main = "Mosaic plot",
+  color = TRUE
+)
+```
+
+
+```{r}
+#fisher.test
+
+hmg_interaction <- interaction_mat[seq(1, nrow(interaction_mat), 8), ]
+htr_interaction <- interaction_mat[!1:nrow(interaction_mat) %in% seq(1, nrow(interaction_mat), 8), ]
+
+tbl <- rbind(c(sum(hmg_interaction < 0.05, na.rm = TRUE), sum(htr_interaction < 0.05, na.rm = TRUE)), 
+              c(sum(hmg_interaction >= 0.05, na.rm = TRUE), sum(htr_interaction >= 0.05, na.rm = TRUE)))
+fisher.test(tbl)
+```
+
+```{r}
+rownames(tbl) <- c('enriched', 'not-enriched')
+colnames(tbl) <- c('self-interaction', 'hetero-interaction')
+
+mosaicplot(tbl,
+  main = "Mosaic plot",
+  color = TRUE
+)
+```
+```{r}
+x <- c()
+for (row in rownames(tbl)) {
+  for (col in colnames(tbl)) {
+    x <- rbind(x, matrix(rep(c(row, col), tbl[row, col]), ncol = 2, byrow = TRUE))
+  }
+}
+df <- as.data.frame(x)
+colnames(df) <- c("Status", "Group")
+df
+```
+
+```{r}
+test <- fisher.test(table(df))
+
+# combine plot and statistical test with ggbarstats
+
+ggbarstats(
+  df, Status, Group,
+  results.subtitle = FALSE,
+  subtitle = paste0(
+    "Fisher's exact test", ", p-value = ",
+    ifelse(test$p.value < 0.001, "< 0.001", round(test$p.value, 3))
+  )
+)
+```
+
+## Distance to nearest enemo?
+
+```{r}
+E()$weight
+```
+```{r}
+get_mins <- function(obj, img){
+  g <- get_dist_graph(obj, img)
+  sobj <- obj[, which(obj$image_slice == img)]
+  same_dist = c()
+  othr_dist = c()
+  cnames <- colnames(sobj)
+  for(cname in cnames){
+    ### Get sames
+    cident = Idents(sobj)[which(colnames(sobj) == cname)]
+    sames = cnames[which(Idents(sobj) == cident)]
+    E_c <- E(g)[from(cname)]
+    if(length(sames) < 2){
+      min_same = NA
+    } else{
+      min_same = min(E_c[to(sames)]$weight)
+    }
+    othrs = cnames[which(Idents(sobj) != cident)]
+    if(length(othrs) == 0){
+      min_othrs = NA
+    } else{
+      min_othrs = min(E_c[to(othrs)]$weight)
+    }
+    same_dist <- c(same_dist, min_same)
+    othr_dist <- c(othr_dist, min_othrs)
+  }
+  df <- as.data.frame(cbind(cnames, same_dist, othr_dist, as.character(Idents(sobj))))
+  colnames(df) <- c('c_id', 'same', 'other', 'ident')
+  return(df)
+}
+```
+```{r}
+tc_3_df <- get_mins(jy_all, '408_TC_3')
+```
+```{r}
+na.omit(tc_3_df) %>%
+  pivot_longer(!c(c_id, ident), names_to = "type", values_to = "dist") %>%
+  ggplot(aes(x = ident, y = as.numeric(dist), color = as.factor(type))) + geom_boxplot()
+```
+```{r}
+### Nearest distance df
+### https://stackoverflow.com/questions/29402528/append-data-frames-together-in-a-for-loop
+
+datalist = list()
+# or pre-allocate for slightly more efficiency
+datalist = vector("list", length = length(imgs))
+
+tic()
+for (i in 1:length(imgs)) {
+    datalist[[i]] <- get_mins(jy_all, imgs[i]) # add it to your list
+}
+toc()
+### Takes 41.756 seconds
+
+nd_df = do.call(rbind, datalist)
+```
+```{r}
+nd_df$area <- jy_all$area
+nd_df$image <- jy_all$image_slice
+nd_df$stream <- 'err'
+nd_df$stream[which(nd_df$image %in% dms_labels)] <- 'DMS'
+nd_df$stream[which(nd_df$image %in% vms_labels)] <- 'VMS'
+nd_df$stream <- as.factor(nd_df$stream)
+nd_df$same <- as.numeric(nd_df$same)
+nd_df$other <- as.numeric(nd_df$other)
+```
+
+
+```{r}
+na.omit(nd_df) %>%
+  pivot_longer(!c(c_id, area, ident, image, stream), names_to = "type", values_to = "dist") %>%
+  filter(stream != 'err') %>%
+  ggplot(aes(x = ident, y = as.numeric(dist), color = as.factor(stream))) + geom_boxplot() + facet_wrap(~type) + RotatedAxis()
+```
+
+```{r}
+na.omit(nd_df) %>%
+  pivot_longer(!c(c_id, area, ident), names_to = "type", values_to = "dist") %>%
+  filter(grepl('MS', area)) %>%
+  ggplot(aes(x = area, y = as.numeric(dist), color = as.factor(type))) + geom_violin() + RotatedAxis()
+```
+```{r}
+na.omit(nd_df) %>%
+  pivot_longer(!c(c_id, area, ident, image, stream), names_to = "type", values_to = "dist") %>%
+  filter(stream != 'err') %>%
+  ggplot(aes(x = stream, y = as.numeric(dist), color = as.factor(type))) + geom_boxplot() + RotatedAxis()
+```
+
+```{r}
+stat.test <- na.omit(nd_df) %>%
+  pivot_longer(!c(c_id, area, ident, image, stream), names_to = "type", values_to = "dist") %>%
+  filter(stream != 'err') %>%
+  filter(ident == 'CGE/LGE') %>%
+  mutate(type = as.factor(type)) %>%
+  dplyr::select(c('stream', 'type', 'dist')) %>%
+  group_by(stream) %>%
+  t_test(dist ~ type) %>%
+  adjust_pvalue(method = "bonferroni") %>%
+  add_significance("p.adj")
+stat.test
+```
+
+
+```{r}
+df <- na.omit(nd_df) %>%
+  pivot_longer(!c(c_id, area, ident, image, stream), names_to = "type", values_to = "dist") %>%
+  filter(stream != 'err') %>%
+  filter(ident == 'CGE/LGE') %>%
+  mutate(type = as.factor(type)) %>%
+  dplyr::select(c('stream', 'type', 'dist'))
+bxp <- ggboxplot(
+  df, x = "stream", y = "dist", 
+  color = "type", palette = c("#00AFBB", "#E7B800")
+  )
+
+# Add p-values onto the box plots
+stat.test <- stat.test %>%
+  add_xy_position(x = "stream", dodge = 0.8)
+bxp + stat_pvalue_manual(
+  stat.test,  label = "p", tip.length = 0
+  )
+
+# Add 10% spaces between the p-value labels and the plot border
+bxp + stat_pvalue_manual(
+  stat.test,  label = "p", tip.length = 0
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+```
+
+```{r}
+bxp + stat_pvalue_manual(
+  stat.test,  label = "p.adj", tip.length = 0,
+  remove.bracket = TRUE
+  )
+
+# Show adjusted p-values and significance levels
+# Hide ns (non-significant)
+bxp + stat_pvalue_manual(
+  stat.test,  label = "{p.adj}{p.adj.signif}", 
+  tip.length = 0, hide.ns = TRUE
+  )
+```
+```{r}
+df$stream <- droplevels(df$stream)
+stat.test2 <- df %>%
+  t_test(dist ~ stream, p.adjust.method = "bonferroni")
+stat.test2
+```
+```{r}
+stat.test <- stat.test %>%
+  add_xy_position(x = "stream", dodge = 0.8)
+bxp.complex <- bxp + stat_pvalue_manual(
+  stat.test,  label = "p", tip.length = 0
+  )
+# 2. Add stat.test2
+# Add more space between brackets using `step.increase` 
+stat.test2 <- stat.test2 %>% add_xy_position(x = "stream")
+bxp.complex <- bxp.complex + 
+  stat_pvalue_manual(
+    stat.test2,  label = "p", tip.length = 0.02,
+    step.increase = 0.05
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1)))
+
+# 3. Display the plot
+bxp.complex 
+```
+```{r fig.width = 4, fig.height = 2}
+bxp.complex 
+```
+
+
+```{r}
+na.omit(nd_df) %>%
+  pivot_longer(!c(c_id, area, ident, image, stream), names_to = "type", values_to = "dist") %>%
+  filter(stream == 'DMS') %>%
+  ggplot(aes(dist, after_stat(density), colour = type)) + geom_freqpoly(binwidth = 1)
+```
+```{r}
+na.omit(nd_df) %>%
+  pivot_longer(!c(c_id, area, ident, image, stream), names_to = "type", values_to = "dist") %>%
+  filter(stream == 'DMS') %>%
+  dplyr::select(dist) %>%
+  as.matrix() %>%
+shapiro.test()
+```
+```{r}
+clump_df$clump_type = "NaN"
+clump_names = str_remove(clump_df$...1, "_Clump")
+clump_df$clump_type[which(clump_names %in% linear)] = "Linear"
+clump_df$clump_type[which(clump_names %in% psuedolinear)] = "Psuedo-Linear"
+clump_df$clump_type[which(clump_names %in% big_clump)] = "True Clump"
+```
+
+
+```{r}
+cdf <- clump_df %>% filter(clump_type != "NaN")
+cdf2 <- cdf[, 2:13]
+```
+
+
+```{r}
+clump_pca <- prcomp(cdf2, center = TRUE,scale. = TRUE)
+
+summary(clump_pca)
+```
+```{r}
+autoplot(clump_pca, data = cdf, colour = 'clump_type')
+```
+```{r}
+clump_df %>%
+  ggplot(aes(x = clump_type, y = eval(as.symbol("Perim.")))) + geom_boxplot()
+```
+
+```{r}
+### Time for Ripley's analysis
+
+```
+
+I only have time for a very short answer. In the spatstat package for R there is a vignette which explains a bit of the theory for replicated point patterns, so you might want to have a look at that: https://cran.rstudio.com/web/packages/spatstat/vignettes/replicated.pdf
+
+Furthermore, a relevant test could be the studentised permutation test developed by Ute Hahn:
+
+Hahn, U. (2012) A studentised permutation test for the comparison of spatial point patterns. Journal of the American Statistical Association 107 (498), 754-764.
+
+This test is implemented in the spatstat function studpermu.test, so you might also try to read the documentation for that.
+
+Finally, a relevant thing may be to pool all the estimates of the K-function for each group to get two overall K-functions to compare. Have a look at the help file for pool (specifically the method pool.fv) in spatstat.
+
+I just want to compare the K-function for each one and then compare between images...
+
+
+```{r}
+
+
+### Iterate through all images
+### run 100 permutations, and get the p value from the real data
+
+### Need to set up the dataframe
+classes <- levels(Idents(jy_all))
+n = length(classes)
+c1 = rep(classes, n)
+c2 = rep(classes, each=n)
+c_df <- as.data.frame(cbind(c1, c2))
+
+## Need to create a jy_all embedding
+embed_164 <- Embeddings(jy_164, "H")
+embed_408 <- Embeddings(jy_408, "H")
+jy_all[["H"]] <- CreateDimReducObject(embeddings = rbind(embed_164, embed_408), key = "pixel_", assay = DefaultAssay(jy_all))
+
+vms_scores <- matrix(0, 1, length(classes))
+dms_scores <- matrix(0, 1, length(classes))
+colnames(vms_scores) <- classes
+colnames(dms_scores) <- classes
+
+for(i in 1:length(imgs)){
+  #print(paste("Permuting image", i, "of", length(imgs)))
+  img <- imgs[i]
+  if(!is.na(interaction_mat['CGE/LGE->CGE/LGE', img]) && interaction_mat['CGE/LGE->CGE/LGE', img] < 0.01){
+    obj <- jy_all[, which(jy_all$image_slice == img)]
+    ### Create nn graph for real
+    interaction_graph <- get_dist_graph(obj, img)
+    ### Iterate through each cell type
+    ### Compute the mean for this one
+    data_cts <- get_dist_interactions(interaction_graph, obj, classes, c_df, threshold)
+    scores <- data_cts$val[seq(1, nrow(interaction_mat), 8)]
+    #score <- data_cts$val[1]
+    #tbl <- table(Idents(obj))
+    #norm_score <- score / tbl['CGE/LGE'] ### This shoudl never be NA
+    if(img %in% vms_labels){
+      vms_scores <- vms_scores + scores
+    }
+    if(img %in% dms_labels){
+      dms_scores <- dms_scores + scores
+    }
+  }
+}
+```
+
+```{r}
+hist(vms_scores)
+```
+```{r}
+hist(dms_scores)
+```
+```{r}
+### So if X and Y represent random variables that draw from the same distribution
+t.test(vms_scores, y = dms_scores)      # P = .00001855
+```
+```{r}
+jy_all.markers <- FindAllMarkers(jy_all, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_all.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+
+```{r, fig.height = 3, fig.width = 5}
+DotPlot(jy_all, features = c('LRP8', 'VLDLR', 'CXCR4', 'CXCR7'),
+        idents = c('CGE/LGE', 'TBR1+ CGE', 'CALB2+DLX2+', 'VIP+GAD1+', 'MGE', 'SST+LHX6+')) + RotatedAxis()
+```
+
+```{r}
+jy_all$area_plot <- "err"
+
+jy_all$area_plot[grepl('164', jy_all$area) & grepl('MS_CC', jy_all$area)] <- 'aDMS'
+jy_all$area_plot[grepl('164', jy_all$area) & grepl('MS_TC', jy_all$area)] <- 'aVMS'
+jy_all$area_plot[grepl('164', jy_all$area) & grepl('4_CC', jy_all$area)] <- 'ACC'
+jy_all$area_plot[grepl('164', jy_all$area) & grepl('4_TC', jy_all$area)] <- 'pirc'
+
+jy_all$area_plot[grepl('408', jy_all$area) & grepl('MS_CC', jy_all$area)] <- 'pDMS'
+jy_all$area_plot[grepl('408', jy_all$area) & grepl('MS_TC', jy_all$area)] <- 'pVMS'
+jy_all$area_plot[grepl('408', jy_all$area) & grepl('8_CC', jy_all$area)] <- 'pCC'
+jy_all$area_plot[grepl('408', jy_all$area) & grepl('8_TC', jy_all$area)] <- 'tc'
+
+
+jy_all$area_plot <- factor(jy_all$area_plot, levels = c('aDMS', 'ACC', 'aVMS', 'pirc', 'pDMS', 'pCC', 'pVMS', 'tc'))
+```
+
+```{r}
+levels(jy_all$area_plot)
+```
+
+
+```{r}
+jy_all$area[jy_all$area_plot == 'err']
+```
+
+
+```{r, fig.height = 3, fig.width = 5}
+DotPlot(jy_all, features = c('LRP8', 'VLDLR', 'CXCR4', 'CXCR7'),
+        group.by = 'area_plot') + RotatedAxis()
+```
+

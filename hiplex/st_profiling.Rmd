@@ -1,0 +1,620 @@
+---
+title: "st_profiling"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+May 23rd, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  #df_to_append <- df_to_append %>%
+  #  dplyr::select(-1)
+  if(grepl('164', file_name)){
+    df_to_append <- df_to_append %>%
+      dplyr::select(-X)
+  }
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  if(!is_empty(df)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df))
+  }
+  df <- rbind(df, df_to_append)
+}
+```
+
+```{r}
+### right now i want experiment # for the day and overwrite to be false
+# 
+# ## Write to file
+# date <- gsub('-', '', Sys.Date())
+# exp_num <- '1'
+# folder <- paste0(date, '_', exp_num)
+# 
+# ## check if folder exists, if not, then proceed
+# expltdir <- file.path(output_dir_plot, folder)
+# extbldir <- file.path(output_dir_plot, folder)
+# 
+# 
+# if(dir.exists(expltdir) || dir.exists(extbldir)){
+#   quit('Folder exists. Set --overwrite to TRUE to replace folder')
+# }
+# 
+# ## Create the directories
+# dir.create(expltdir)
+# dir.create(extbldir)
+```
+
+
+### Add the cellnames as rownames
+```{r}
+rownames(df) <- c(outer(c('C'), 1:dim(df)[1], FUN=paste0))
+```
+
+## Define the different gene sets based on conversation with JY
+```{r}
+migra = toupper(c('Dcx', 'Lrp8', 'Reln', 'Dcdc2', 'Ncam1', 'Kia0319', 'Vldlr'))
+#CGE = toupper(c('Egfr', 'Vip', 'Prox1'))
+#LGE = toupper(c('Tshz1', 'Gsx2', 'Emx1'))
+#MGE = toupper(c('Lhx6', 'Maf1', 'Sst'))
+CGE = toupper(c('Egfr', 'Prox1'))
+LGE = toupper(c('Tshz1', 'Gsx2', 'Emx1'))
+MGE = toupper(c('Lhx6', 'Maf1', 'Nkx2.1'))
+CGE_LGE = toupper(c('Scgn', 'Couptf2', 'Sp8', 'Calb2', 'Pax6'))
+GABA = toupper(c('Dlx2', 'Gad1'))
+mature_IN = toupper(c('Gad1', 'Vip', 'Sst'))
+progen_IN = toupper(c('Dlx2'))
+Excit = toupper(c('Eomes', 'Tbr1', 'Satb2'))
+ligand = toupper(c('Reln', 'Cxcl12', 'Cxcl14'))
+recept = toupper(c('Lrp8', 'Cxcr7', 'Cxcr4', 'Vldlr'))
+```
+
+## Heatmaps
+
+### Rearrange the data to wide for heatmap
+```{r}
+df_longer <- df %>%
+  rownames_to_column('Cell') %>%
+  dplyr::select(-area) %>%
+  pivot_longer(!Cell, names_to = 'Gene', values_to = "Puncta2Nuc_IR")
+
+df_wide <- df %>%
+  rownames_to_column('Cell')%>%
+  dplyr::select(-area) %>%
+  pivot_longer(!Cell, names_to = 'Gene', values_to = "Puncta2Nuc_IR") %>%
+  pivot_wider(names_from = Gene, values_from = Puncta2Nuc_IR)
+```
+
+
+## some quick heatmap business
+
+```{r}
+### log(x+1) function
+log1 <- function(x) {
+   return(log(x+1))
+}
+
+### Scale and then log+1
+log1_and_mult <- function(x) {
+   return(log1(x*1e4))
+}
+
+### Get the numeric values only
+df_num <- df_wide %>%
+  column_to_rownames('Cell')
+
+### Normalize to cell total
+### Log + Multiply
+### Center and scale
+scaled_mat <- df_num %>%
+  sweep(1, rowSums(df_num), '/') %>%
+  log1_and_mult() #%>%
+  #apply(1, scale)
+
+### Apply separate clustering, need to look into why 
+hr <- hclust(as.dist(1-cor(t(scaled_mat), method="pearson")), method = "complete")
+hc <- hclust(as.dist(1-cor(scaled_mat, method="spearman")), method="complete")
+
+annotation <- data.frame(area = factor(df$area))
+rownames(annotation) <- rownames(df) # check out the row names of annotation
+
+rownames(scaled_mat) <- colnames(df_num)
+scaled_mat %>%
+  pheatmap(annotation_col = annotation, 
+           color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(100),
+  #breaks = seq(from= -5, to = 5, by = 11/100.), 
+  cluster_rows = hr, cluster_cols = hc, 
+  #cluster_rows = TRUE, cluster_cols = TRUE, 
+  #clustering_distance_rows = "correlation", 
+  #clustering_distance_cols = "correlation",
+  fontsize_row = 8, fontsize_col = 4, show_colnames = FALSE,
+           show_rownames = TRUE, cell_width = 6, cellheight = 8)#,
+          #filename = file.path(output_dir, 'log.png'))
+```
+### By area, not dendogram
+```{r}
+rownames(scaled_mat) <- colnames(df_num)
+scaled_mat %>%
+  pheatmap(annotation_col = annotation, 
+           color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(100),
+  #breaks = seq(from= -5, to = 5, by = 11/100.), 
+  cluster_rows = hr, cluster_cols = FALSE, 
+  #cluster_rows = TRUE, cluster_cols = TRUE, 
+  #clustering_distance_rows = "correlation", 
+  #clustering_distance_cols = "correlation",
+  fontsize_row = 8, fontsize_col = 4, show_colnames = FALSE,
+           show_rownames = TRUE, cell_width = 6, cellheight = 8)#,
+          # filename = '/home/aunoy/pheatmap_logz_norm.png')
+```
+
+
+```{r}
+dist_mat <- as.dist(1-cor(scaled_mat, method="spearman"))
+dist_mat %>%
+pheatmap(annotation_col = annotation,
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(100),
+        cluster_rows = TRUE, cluster_cols = TRUE,
+fontsize_row = 8, fontsize_col = 4, show_colnames = FALSE,
+         show_rownames = FALSE, cell_width = 0.1, cellheight = 0.3)#,
+    #filename = file.path(output_dir, 'spearmann_log.png'))
+```
+
+
+```{r}
+df_longer %>%
+  filter(Gene == 'Gsx2') %>%
+  ggplot(aes(x=Puncta2Nuc_IR)) + 
+  geom_histogram(color="black", fill="white")
+```
+```{r}
+plots = list()
+save = FALSE
+all_genes <- df %>% 
+  dplyr::select(-area) %>%
+  colnames()
+
+for (i in 1:length(all_genes)){
+  plots[[i]] <- df_longer %>%
+  filter(Gene == all_genes[i]) %>%
+  mutate(log_norm = log1_and_mult(Puncta2Nuc_IR)) %>%
+  ggplot(aes(x=log_norm, label = Gene)) + 
+  geom_histogram(color="black", fill="white") + 
+  labs(title=all_genes[i])+
+  theme_classic()
+}
+
+#gridExtra::grid.arrange(grobs = plots, ncol = 4, nrow = 8, lengths=2:6)
+if (save){
+  ml <- marrangeGrob(plots, nrow=2, ncol=2)
+  ggsave("/home/aunoy/raw_histograms.pdf", ml)
+} else{
+  marrangeGrob(plots, nrow=2, ncol=2)
+}
+```
+
+### process data in Seurat object
+
+```{r}
+jyobj <- df %>%
+  dplyr::select(-c(area, IMAGE.NAME)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+
+```{r}
+jyobj <- NormalizeData(jyobj, scale.factor = 1e5) ###
+sum(jyobj@assays$RNA[,] < 1)
+
+```
+### plot highly variable genes
+```{r}
+jyobj <- FindVariableFeatures(jyobj, selection.method = "vst")
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(jyobj), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(jyobj) + theme(axis.title.x = element_text(size = 10), axis.text.x = element_text(size = 6))
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE) + theme(axis.title.x = element_text(size = 10), axis.text.x = element_text(size = 6))
+plot1 + plot2 + theme(axis.title.y = element_text(size = 10))
+#ggsave(file.path(output_dir, 'vst_plot.png'))
+```
+
+```{r}
+all.genes <- rownames(jyobj)
+jyobj <- ScaleData(jyobj, features = all.genes)
+```
+
+```{r}
+jyobj <- RunPCA(jyobj, features = VariableFeatures(object = jyobj), approx = FALSE)
+print(jyobj[["pca"]], dims = 1:5, nfeatures = 5)
+```
+```{r}
+VizDimLoadings(jyobj, dims = 1:2, reduction = "pca")
+```
+
+```{r}
+jyobj$area <- df$area
+DimPlot(jyobj, reduction = "pca", group.by = 'area')
+
+```
+```{r}
+DimHeatmap(jyobj, dims = 1,  balanced = TRUE)
+```
+
+```{r}
+DimHeatmap(jyobj, dims = 1:15, balanced = TRUE)
+```
+
+```{r}
+# jyobj <- JackStraw(jyobj, num.replicate = 100)
+# jyobj <- ScoreJackStraw(jyobj, dims = 1:20)
+# 
+# JackStrawPlot(jyobj, dims = 1:15)
+```
+```{r}
+ElbowPlot(jyobj)
+```
+
+## PC30,resolution 0.5
+
+```{r}
+## dont' do 
+gs <- list(dims = c(30),
+           res = c(0.8)) %>% 
+  cross_df() # Convert to data frame grid
+
+getclusters <- function(dims, res, jyobj){
+  y <- FindNeighbors(jyobj, dims = 1:dims)
+  x <- FindClusters(y, resolution = res)
+  return (length(unique(x$seurat_clusters)))
+}
+
+gs <- gs %>% mutate(clusters = pmap(gs, getclusters, jyobj))
+
+#jyobj <- FindNeighbors(jyobj, dims = 1:30)
+#jyobj <- FindClusters(jyobj, resolution = 0.5)
+```
+
+```{r}
+gs$clusters <- do.call(rbind, gs$clusters)
+```
+
+```{r}
+gs %>%
+  filter(clusters < 40) %>%
+  ggplot(aes(x = dims, y = clusters, group = res, color = factor(res))) + geom_line() +
+  theme_classic() + ggtitle('UMAP Clustering Parameters') + labs(color = 'resolution')
+```
+
+```{r}
+head(Idents(jyobj), 3)
+
+```
+
+```{r}
+## dont' do 
+gs <- list(res = seq(0.1, 1, 0.05))
+
+getclusters <- function(res, jyobj){
+  y <- FindNeighbors(jyobj, dims = 1:30)
+  x <- FindClusters(y, resolution = res)
+  return (length(unique(x$seurat_clusters)))
+}
+
+gs <- gs %>% mutate(clusters = pmap(gs, getclusters, jyobj))
+
+#jyobj <- FindNeighbors(jyobj, dims = 1:30)
+#jyobj <- FindClusters(jyobj, resolution = 0.5)
+```
+
+```{r}
+clustering = pmap(gs, getclusters, jyobj)
+clustering <- unlist(clustering, recursive = FALSE)
+
+clust_plot = cbind(gs$res, clustering)
+```
+
+```{r}
+colnames(clust_plot) = c('res', 'clustering')
+clust_plot %>%
+  as_data_frame() %>%
+ggplot(aes(x = res, y = clustering)) + geom_line() + theme_classic()
+```
+```{r}
+
+```
+
+
+```{r}
+gs %>%
+  filter(clusters < 40) %>%
+  ggplot(aes(x = dims, y = clusters, group = res, color = factor(res))) + geom_line() +
+  theme_classic() + ggtitle('UMAP Clustering Parameters') + labs(color = 'resolution')
+```
+
+
+```{r}
+jyobj <- RunUMAP(jyobj, dims = 1:30)
+
+new.cluster.ids <- c("Excitatory Neuron", "Ganglionic Eminences?", "GABAergic Projection Neuron","Mature CGE VIP+ INs", "Immature
+CALB2+ CGE INs", "Ganglionic Eminences 1?", "Mature MGE SST+ INs", "Dorsal LGE", "Cortical Layer 2 Neurons")
+names(new.cluster.ids) <- levels(jyobj)
+jyobj <- RenameIdents(jyobj, new.cluster.ids)
+DimPlot(jyobj, reduction = "umap", pt.size = 1) + NoAxes() #+ NoLegend() + NoAxes()
+
+
+DimPlot(jyobj, reduction = "umap")
+```
+```{r}
+getarea <- function(abbr){
+  print(length(abbr))
+  ant <- grepl('164', abbr)
+  ap <- ifelse(ant, 'Anterior', 'Posterior')
+  cc <- grepl('CC', abbr)
+  tc <- ifelse(cc, 'Cingulate', 'Temporal')
+  ms <- grepl('MS', abbr)
+  if(length(ms) > 1){
+    print(ms)
+  }
+  msnms <- ifelse(ms, 'Migratory', '')
+  
+  if(ms && !cc){
+    dms <- grepl('d', abbr)
+    dv <- ifelse(dms, 'Dorsal ', 'Ventral ')
+  }
+  else{dv = ''}
+  
+  if(ms){
+    return(paste0(dv, msnms, ' to ', ap, ' ', tc, ' Cortex'))
+  }
+  else{return(paste(ap, tc, 'Cortex'))}
+}
+
+getAbbr <- function(abbr){
+  print(length(abbr))
+  ant <- grepl('164', abbr)
+  ap <- ifelse(ant, 'A', 'P')
+  cc <- grepl('CC', abbr)
+  tc <- ifelse(cc, 'CC', 'TC')
+  ms <- grepl('MS', abbr)
+
+  msnms <- ifelse(ms, 'MS', '')
+  
+  if(ms && !cc){
+    dms <- grepl('d', abbr)
+    dv <- ifelse(dms, '', ' 2')
+  }
+  else{dv = ''}
+  #"MS into "
+  if(ms){
+    #return(paste0(dv, msnms, ' into ', ap, ' ', tc, ' Cortex'))
+    if(paste0(msnms, ' into ', ap, tc, dv) == 'MS into ATC 2'){
+      return('MS into PC')
+    }
+    return(paste0(msnms, ' into ', ap, tc, dv))
+  }
+  else{return(paste0(ap, tc))}
+}
+simp <- jyobj$area %>% as_tibble() %>% rename(abbr = value)
+jyobj$areaAbbr <- do.call(rbind, pmap(simp, getAbbr))
+#jyobj$ant_post <- factor(grepl('164', df$area), labels = c('posterior', 'anterior'))
+
+DimPlot(jyobj, reduction = "umap", split.by = 'areaAbbr') + ggtitle('spatial location') +
+  NoAxes()  + facet_wrap(~areaAbbr)
+```
+
+## Compute scores for groups of genes
+
+```{r}
+jyobj.markers <- FindAllMarkers(jyobj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jyobj.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+
+# PC30,resolution 0.8
+
+```{r}
+jyobj <- FindNeighbors(jyobj, dims = 1:30)
+jyobj <- FindClusters(jyobj, resolution = 0.8)
+```
+
+```{r}
+head(Idents(jyobj), 3)
+
+```
+
+```{r}
+jyobj <- RunUMAP(jyobj, dims = 1:30)
+
+DimPlot(jyobj, reduction = "umap", group.by = 'seurat_clusters')
+```
+```{r}
+jyobj$ant_post <- factor(grepl('164', jyobj$area), labels = c('posterior', 'anterior'))
+jyobj$MS <- factor(grepl('MS', jyobj$area), labels = c('non-migratory (cortex)', 'migratory'))
+jyobj$CCvTC <- factor(grepl('CC', jyobj$area), labels = c('temporal cortex', 'cingulate cortex'))
+#jyobj@meta.data$DV <- factor(grepl('v', jyobj$area) | grepl('164_MS_TC', jyobj$area), labels = c('Dorsal stream', 'Ventral stream'))
+jyobj$DV <- factor(grepl('v', jyobj$area) | grepl('164_MS_TC', jyobj$area), labels = c('Dorsal stream', 'Ventral stream'))
+
+#post <- grepl('dMS', jyobj$area) | grepl('vMS', jyobj$area)
+#post <- Idents(jyobj) == 'Ganglionic Eminences 3???'
+post <- df$IMAGE.NAME == 'TC_1'
+
+subset <- jyobj[,ix_408_CC]
+#print(unique(jyobj$image_name[!(jyobj$image_name %in% subset$image_name)]))
+
+#sum(subset$DV == 'Dorsal migratory stream')
+
+#DimPlot(subset, reduction = "umap", feature) + NoAxes() + NoLegend()
+subset$x = df_408_CC$x
+subset$y = df_408_CC$y
+subset$d = sqrt(subset$x ** 2 + subset$y ** 2)
+FeaturePlot(subset, features = c('x', 'y', 'd'))
+```
+```{r}
+post <- jyobj$seurat_clusters == 1 | jyobj$seurat_clusters == 5 | jyobj$seurat_clusters == 8
+
+subset <- jyobj[,post]
+
+sum(subset$DV == 'Dorsal migratory stream')
+
+#DimPlot(subset, reduction = "umap")
+FeaturePlot(subset, features = c('NKX2.1',  'LHX6', 'MAF1'), coord.fixed = TRUE)
+```
+```{r}
+### define groups
+#FeaturePlot(subset, features = c('SP8', 'COUPTF2'), split.by = 'DV')
+
+#VlnPlot(subset, features = c('NKX2.1', 'PROX1', 'LHX6'), split.by = 'MS')
+```
+
+## Compute scores for groups of genes
+
+```{r}
+jyobj.markers <- FindAllMarkers(jyobj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jyobj.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+
+## Look at co-expression
+
+
+```{r}
+# pairs <- data.frame(rbind(c("EGFR", "COUPTF2"),
+#                c("PROX1", "SCGN"),
+#                c("SP8", "COUPTF2"),
+#                c("DCX", "GAD1"),
+#                c("TBR1", "SATB2"),
+#                c("TBR1", "DCX"),
+#                c("RELN", "VLDLR"),
+#                c("SCGN", "VLDLR"),
+#                c("VLDLR", "COUPTF2"),
+#                c("VLDLR", "DCX"),
+#                c("TBR1", "GAD1")))
+# 
+# plots = list()
+# save = FALSE
+# 
+# for (i in 1:3){
+#   plotobj <- FeaturePlot(jyobj, features = as.character(pairs[i, ]), blend = TRUE)
+#   idx <- i*4-3
+#   plots[[idx]] <- plotobj[[1]]
+#   plots[[idx+1]] <- plotobj[[2]]
+#   plots[[idx+2]] <- plotobj[[3]]
+#   plots[[idx+3]] <- plotobj[[4]]
+# }
+# 
+# #gridExtra::grid.arrange(grobs = plots, ncol = 4, nrow = 8, lengths=2:6)
+# if (save){
+#   ml <- marrangeGrob(plots, nrow=2, ncol=2)
+#   ggsave("/home/aunoy/raw_histograms.pdf", ml)
+# } else{
+#   marrangeGrob(plots, nrow=2, ncol=2)
+# }
+```
+
+#```{r, fig.width=18,fig.height=6}
+```{r}
+###FeaturePlot(jyobj, features = c("EGFR", "COUPTF2"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("PROX1", "SCGN"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("SP8", "COUPTF2"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("DCX", "GAD1"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("TBR1", "SATB2"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("TBR1", "DCX"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("RELN", "VLDLR"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("SCGN", "VLDLR"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("VLDLR", "COUPTF2"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("VLDLR", "DCX"), blend = TRUE)
+```
+
+```{r}
+###FeaturePlot(jyobj, features = c("TBR1", "GAD1"), blend = TRUE)
+```
+
+
+```{r}
+newdf <- df %>% mutate(cellnum = 1:nrow(df))
+cc_408_df = newdf[ix_408_CC, ]
+for(image_name in unique(cc_408_df$IMAGE.NAME)) {
+  image_df <- cc_408_df %>% filter(IMAGE.NAME == image_name)
+  clust_df <- as.data.frame(jyobj$seurat_clusters[image_df$cellnum])
+  clust_df <- clust_df %>% rownames_to_column('arb')
+  clust_df$roinum <- 1:nrow(clust_df)
+  colnames(clust_df) <- c('cellnum', 'cluster', 'roinum')
+  output_path <- '/home/aunoy/st/arc_profiling/st_analysis/results/tables/20220627_1'
+  write.csv(clust_df, file.path(output_path, paste0(image_name, '.csv')))
+}
+
+
+```
+

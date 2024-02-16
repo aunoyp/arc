@@ -1,0 +1,394 @@
+---
+title: "st_clump"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+July 21st, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+library(png)
+library(cowplot)
+library(magick)
+library(scales)
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+clump_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clumps'
+meta_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/overlay'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_408 = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  if(grepl('164', file_name)){
+    next
+  }
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  
+  ## Add relative_XY_position
+  
+  if(!is_empty(df_408)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df_408))
+  }
+  df_408 <- rbind(df_408, df_to_append)
+}
+```
+```{r}
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='_Cluster', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='X', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='L2_', replacement='L2-'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='-L2', replacement='_L2'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='Tc_12', replacement='TC_12'))
+## Missing
+df_408 = df_408[df_408$IMAGE.NAME != 'Layer1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_18', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_19', ]
+#df_408$IMAGE.NAME = toupper(df_408$IMAGE.NAME)
+unique(df_408$IMAGE.NAME)
+```
+
+
+## Order the images
+```{r}
+unique(df_408$IMAGE.NAME)
+images_ordered = c('TC_20', 'TC_17', 'TC_16', 'TC_15', 'TC_14', 'TC_13', 'TC_12', 'TC_11', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5',
+                   'TC_4', 'TC_3', 'TC_2', 'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10', 'CC_11', 'CC_12', 'CC_L2-3', 'CC_L2-2', 'CC_L2-1', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_408$X_horz = -1
+df_408$Y_horz = -1
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 25
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('408', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_408[df_408$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_408[df_408$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_408) = 1:nrow(df_408)
+jy_408 = df_408 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X_horz, Y_horz)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
+normed = GetAssayData(jy_408, slot = 'data')
+normed[normed < 3] = 0
+jy_408 <- SetAssayData(jy_408, slot = 'data', normed)
+```
+
+```{r}
+jy_408 <- FindVariableFeatures(jy_408, selection.method = "vst")
+all.genes <- rownames(jy_408)
+jy_408 <- ScaleData(jy_408, features = all.genes)
+jy_408 <- RunPCA(jy_408, approx = FALSE)
+jy_408 <- FindNeighbors(jy_408, dims = 1:30)
+jy_408 <- FindClusters(jy_408, resolution = 1.5)
+jy_408 <- RunUMAP(jy_408, dims = 1:30)
+
+DimPlot(jy_408,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+```{r}
+hcoords = df_408 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_408))
+```
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_164 = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  if(grepl('408', file_name)){
+    next
+  }
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  
+  ## Add relative_XY_position
+  
+  if(!is_empty(df_164)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df_164))
+  }
+  df_164 <- rbind(df_164, df_to_append)
+}
+```
+```{r}
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='CC-', replacement='CC_'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='X', replacement=''))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='L2', replacement='CC_L2'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='L2_', replacement='L2-'))
+df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='-L2', replacement='_L2'))
+tc_cortical_names_bad = df_164[grepl('TC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME']
+df_164[grepl('TC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME'] = unlist(lapply(tc_cortical_names_bad, gsub, pattern='Cort', replacement='TC_Cort'))
+cc_cortical_names_bad = df_164[grepl('CC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME']
+df_164[grepl('CC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.NAME'] = unlist(lapply(cc_cortical_names_bad, gsub, pattern='Cort', replacement='CC_Cort'))
+#df_164$IMAGE.NAME = unlist(lapply(df_164$IMAGE.NAME, gsub, pattern='Tc_12', replacement='TC_12'))
+## Missing
+#df_164 = df_164[df_164$IMAGE.NAME != 'Layer1', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_1', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_18', ]
+#df_164 = df_164[df_164$IMAGE.NAME != 'TC_19', ]
+#df_164$IMAGE.NAME = toupper(df_164$IMAGE.NAME)
+unique(df_164$IMAGE.NAME)
+```
+## Now we know that everything is equal to one another, we should load the variable
+
+```{r}
+image_names = unique(df_164$IMAGE.NAME)
+# Preset these variables to negative values so I can easily check if they were updated later
+df_164$X = -1
+df_164$Y = -1
+# set some normalization variables
+## This is the size of the image when the pixel values are taken from top left down
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 32
+TC_IMAGE_HEIGHT = 410
+TC_IMAGE_WIDTH = 446
+CC_IMAGE_HEIGHT= 422
+CC_IMAGE_WIDTH = 214
+
+# Load the dataframe with global and relative coordinates
+img_cords = read.table(file.path(meta_dir, '164_pixel_coordinates.csv'), sep = ',', header = TRUE)
+
+images = list.files(meta_dir)
+for(image_name in image_names){
+    if(grepl('408', image_name)){
+      next
+    }
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    if(cortex == 'CC'){ 
+      print(paste('cc', filename, image_name))
+      ## So if CC, we add the coordinates for TC_1 to overall image coordinates
+      x_adj = img_cords[img_cords$Name == 'TC_1', 'x'] + 
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'x']
+      ## Start from bottom, add the height, subtract TC_1 height, and then global CC1 to TC1
+      y_adj = TC_IMAGE_HEIGHT - img_cords[img_cords$Name == 'TC_1', 'y'] +
+                img_cords[img_cords$Name == 'G_CC1_to_TC1', 'y'] + CC_IMAGE_HEIGHT
+    }else{
+      print(paste('tc', filename, image_name))
+      x_adj = 0
+      y_adj = TC_IMAGE_HEIGHT
+    }
+    
+    ## So don't do repelled for now
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    ## so the resized x distance is from left, so just add to the box location and adj
+    df_164[df_164$IMAGE.NAME == image_name, 'X'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + 
+                                                    img_cords[img_cords$Name == image_name, 'x'] + x_adj
+    ## resized y distance
+    df_164[df_164$IMAGE.NAME == image_name, 'Y'] = y_adj - img_cords[img_cords$Name == image_name, 'y'] - 
+                                                      (coordinates$Y_Coordinate_In_pixels / IMAGE_SIZE * 
+                                                      IMAGE_LEN)  
+}
+```
+
+
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_164) = 1:nrow(df_164)
+jy_164 = df_164 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X, Y)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_164 <- NormalizeData(jy_164, scale.factor = 1e5) ###
+normed = GetAssayData(jy_164, slot = 'data')
+normed[normed < 3] = 0
+jy_164 <- SetAssayData(jy_164, slot = 'data', normed)
+```
+
+```{r}
+jy_164 <- FindVariableFeatures(jy_164, selection.method = "vst")
+all.genes <- rownames(jy_164)
+jy_164 <- ScaleData(jy_164, features = all.genes)
+jy_164 <- RunPCA(jy_164, approx = FALSE)
+jy_164 <- FindNeighbors(jy_164, dims = 1:30)
+jy_164 <- FindClusters(jy_164, resolution = 0.8)
+jy_164 <- RunUMAP(jy_164, dims = 1:30)
+
+DimPlot(jy_164,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+```{r}
+unique(df_164$IMAGE.NAME)
+images_ordered = c('TC_Cortical3', 'TC_Cortical2', 'TC_Cortical1', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5', 'TC_4', 'TC_3', 'TC_2','TC_1','CC_2','CC_3',
+           'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10',
+           'CC_L2-1', 'CC_L2-2', 'CC_L2-3', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_164$X_horz = -1
+df_164$Y_horz = -1
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_164[df_164$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_164[df_164$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+```{r}
+hcoords = df_164 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_164[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_164))
+```
+
+
+```{r}
+jy_164<- RenameCells(jy_164, c(outer('164_', 1:ncol(jy_164), FUN=paste0)))
+jy_164$area = df_164$area
+jy_408<- RenameCells(jy_408, c(outer('408_', 1:ncol(jy_408), FUN=paste0)))
+jy_408$area = df_408$area
+jy_all <- merge(jy_164, jy_408)
+```
+```{r}
+jy_all <- NormalizeData(jy_all, scale.factor = 1e5) ###
+normed = GetAssayData(jy_all, slot = 'data')
+normed[normed < 3] = 0
+jy_all <- SetAssayData(jy_all, slot = 'data', normed)
+```
+
+```{r}
+jy_all <- FindVariableFeatures(jy_all, selection.method = "vst")
+all.genes <- rownames(jy_all)
+jy_all <- ScaleData(jy_all, features = all.genes)
+jy_all <- RunPCA(jy_all, approx = FALSE)
+jy_all <- FindNeighbors(jy_all, dims = 1:30)
+jy_all <- FindClusters(jy_all, resolution = 1.5)
+jy_all <- RunUMAP(jy_all, dims = 1:30)
+
+DimPlot(jy_all,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```

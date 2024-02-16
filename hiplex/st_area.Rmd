@@ -1,0 +1,278 @@
+---
+title: "st_area"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+May 23rd, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  #df_to_append <- df_to_append %>%
+  #  dplyr::select(-1)
+  if(grepl('164', file_name)){
+    df_to_append <- df_to_append %>%
+      dplyr::select(-X)
+  }
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  if(!is_empty(df)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df))
+  }
+  df <- rbind(df, df_to_append)
+}
+```
+
+## Let's just test by area first
+
+What are our hypothesis?
+Different streams may reflect different "LGE, MGE, and CGE" markers
+```{r}
+# Take all cells in cluster 2, and find markers that separate cells in the 'g1' group (metadata
+# variable 'group')
+#markers <- FindMarkers(pbmc_small, ident.1 = "g1", group.by = 'groups', subset.ident = "2")
+#head(x = markers)
+
+
+markers <- FindMarkers(jyobj, ident.1 = "408_CC", ident.2 = "408_TC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## Posterior CC vs TC
+### CC
+ASCL1 - pro... neural?
+MAF1 - MGE marker later
+PAX6 - CGE/LGE
+RELN - signaling molecule
+SST - Somatostatin
+SP8 - LGE/CGE
+
+### TC
+CALB2 - CGE/LGE neuronal marker (mature)
+CXCL12 - chemokine
+NKX2.1 - MGE early marker
+TSHZ1 - LGE marker
+
+```{r}
+VlnPlot(jyobj, features = c('MAF1', 'PAX6', 'RELN', 'SST', 'SP8', 'CALB2', 'CXCL12', 'NKX2.1', 'TSHZ1'), stack = TRUE, group.by = 'area')
+```
+
+```{r}
+VlnPlot(jyobj, features = 'CXCR7', group.by = 'area')
+```
+
+```{r}
+VlnPlot(jyobj, features = 'COUPTF2', group.by = 'area')
+```
+
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "408_CC", ident.2 = "164_CC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## Posterior CC vs anterior CC
+### Posterior
+GSX2
+NKX2.1
+MAF1
+VIP
+NCAM1
+RELN
+
+### anterior
+CALB2
+DLX2
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "408_TC", ident.2 = "164_TC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## Posterior TC vs Anterior TC
+### Posterior TC
+NKX2.1
+PAX6
+CXCL12
+ASCL1
+
+### Anterior TC
+MAF1
+CXCR4
+SST
+COUPTF2.... how really?
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "408_CC", ident.2 = "408_MS_CC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## Posterior CC vs Posterior MS to CC
+### Posterior CC
+PAX6
+SATB2
+VIP
+
+### Posterior MS to CC
+TSHZ1
+NKX2.1
+MAF1
+VLDLR
+CXCR7
+PROX1
+EGFR
+GSX2
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "164_TC", ident.2 = "164_CC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## anterior TC vs anterior CC
+### anterior TC
+GSX2
+MAF1
+LRP8
+CXCR7
+
+
+### anterior CC
+PAX6
+ASCL1
+DLX2
+RELN
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "408_TC", ident.2 = "408_dMS_TC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## Posterior TC vs Posterior dorsal migratory stream
+### Posterior TC
+CXCL12
+CALB2
+SATB2
+
+### dorsal migratory stream
+MAF1
+ASCL1
+EMX1
+DLX2
+PROX1
+SP8
+LHX6
+COUPTF2
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "408_TC", ident.2 = "408_vMS_TC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## Posterior TC vs Posterior ventral migratory stream
+### Posterior TC
+SATB2
+CXCL12
+NXK2.1
+CALB2
+VIP
+RELN
+KIA0319
+PAX6
+ASCL1
+GAD1
+
+### ventral migratory stream
+TBR1
+LRP8
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "408_vMS_TC", ident.2 = "408_dMS_TC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## posterior VMS vs anterior VMS
+### vMS
+TBR1 - Excitatory immature? Deep brain marker 1, highly expressed in deep layers
+
+### dMS
+ASCL1 - MASH1, proneural
+MAF1 - MGE
+CXCR4 - Chemokine receptor
+SATB2 - Excitatory mature?
+NXK2.1 - MGE
+RELN - Signaling molecule
+
+Question... what is happening to the other markers? Are they moving up or down?
+So we can ignore MAF1
+NXK2.1 is going down... that makes sense
+CXCR4: receptor is going down, and ligand signaling is going down? Is the ligand
+pulling along other cells? That would be pretty interesting
+TBR1: strangely going up. Maybe if we take GAD1 cells specifically this might be different
+
+
+```{r}
+VlnPlot(jyobj, features = c('ASCL1', 'MAF1', 'CXCR4', 'SATB2', 'NKX2.1', 'RELN', 'CXCL12', 'TBR1'), stack = TRUE, group.by = 'area')
+```
+
+
+```{r}
+markers <- FindMarkers(jyobj, ident.1 = "164_TC", ident.2 = "164_MS_TC", group.by = 'area')
+markers %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+## anterior TC vs anterior TC stream
+### anterior TC
+CXCR4 - Receptor 4
+SATB2 - Excitatory
+KIA0319 - Disease Dyslexia
+CALB2 - Excitatory mature
+DCDC2 - Disease Dyslexia
+VIP - Mature
+SST - Mature
+CXCL12 - Signaling ligand
+
+### Anterior TC stream
+NXK2.1 - MGE
+PAX6 - CGE/LGE Marker
+SP8 - CGE/LGE
+DLX2 - Broad GABAergic

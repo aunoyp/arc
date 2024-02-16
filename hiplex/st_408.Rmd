@@ -1,0 +1,611 @@
+---
+title: "st_408"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+July 21st, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+library(png)
+library(cowplot)
+library(magick)
+library(scales)
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+meta_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/overlay'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_408 = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  if(grepl('164', file_name)){
+    next
+  }
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  
+  ## Add relative_XY_position
+  
+  if(!is_empty(df_408)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df_408))
+  }
+  df_408 <- rbind(df_408, df_to_append)
+}
+```
+```{r}
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='_Cluster', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='X', replacement=''))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='L2_', replacement='L2-'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='-L2', replacement='_L2'))
+df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='Tc_12', replacement='TC_12'))
+## Missing
+df_408 = df_408[df_408$IMAGE.NAME != 'Layer1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_1', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_18', ]
+df_408 = df_408[df_408$IMAGE.NAME != 'TC_19', ]
+#df_408$IMAGE.NAME = toupper(df_408$IMAGE.NAME)
+unique(df_408$IMAGE.NAME)
+```
+## Now we know that everything is equal to one another, we should load the variable
+
+```{r}
+images_ordered = c('TC_20', 'TC_17', 'TC_16', 'TC_15', 'TC_14', 'TC_13', 'TC_12', 'TC_11', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5',
+                   'TC_4', 'TC_3', 'TC_2', 'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10', 'CC_11', 'CC_12', 'CC_L2-3', 'CC_L2-2', 'CC_L2-1', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_408$X_horz = -1
+df_408$Y_horz = -1
+IMAGE_SIZE = 1024
+## This is the size of an image in the global coordinate space
+IMAGE_LEN = 25
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('408', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_408[df_408$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_408[df_408$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_408) = 1:nrow(df_408)
+jy_408 = df_408 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X_horz, Y_horz)) %>%
+  t() %>%
+  CreateSeuratObject()
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
+normed = GetAssayData(jy_408, slot = 'data')
+normed[normed < 3] = 0
+jy_408 <- SetAssayData(jy_408, slot = 'data', normed)
+```
+
+```{r}
+jy_408$gad1_true = normed['GAD1',] != 0 #& normed['SATB2',] == 0
+```
+
+```{r}
+DimPlot(jy_408, #cells = grepl('CC', df_408$area), 
+        cols = c('purple', 'grey'), reduction = "XY", pt.size = 0.2, group.by = 'gad1_true', order = which(jy_408$gad1_true)) + coord_fixed(ratio = 1)
+```
+```{r}
+jy_408 <- FindVariableFeatures(jy_408, selection.method = "vst")
+all.genes <- rownames(jy_408)
+jy_408 <- ScaleData(jy_408, features = all.genes)
+jy_408 <- RunPCA(jy_408, approx = FALSE)
+jy_408 <- FindNeighbors(jy_408, dims = 1:30)
+jy_408 <- FindClusters(jy_408, resolution = 1.5)
+jy_408 <- RunUMAP(jy_408, dims = 1:30)
+
+DimPlot(jy_408,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+```{r}
+DimPlot(jy_408, reduction = "H", pt.size = 1, split.by = 'seurat_clusters') + NoAxes() + NoLegend()
+```
+```{r}
+jy_408.markers <- FindAllMarkers(jy_408, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_408.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+```{r}
+jy_408_0v4.markers <- FindMarkers(jy_408, ident.1 = 10, ident.2 = 9, only.pos = TRUE)
+# view results
+head(jy_408_0v4.markers)
+```
+
+
+```{r}
+breakpoints = 1:20/10+0.3
+plots = list()
+jy_408 <- FindNeighbors(jy_408, dims = 1:30)
+i = 1
+for (breakpoint in breakpoints){
+  jy_408 <- FindClusters(jy_408, resolution = breakpoint)
+  jy_408 <- RunUMAP(jy_408, dims = 1:30)
+  jy_408.markers <- FindAllMarkers(jy_408, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+  labels = jy_408.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 1, order_by = avg_log2FC)
+  new.cluster.ids <- labels$gene
+  names(new.cluster.ids) <- levels(jy_408)
+  jy_408 <- RenameIdents(jy_408, new.cluster.ids)
+  plots[[i]] = DimPlot(jy_408, reduction = "umap", pt.size = 1, label = TRUE) + NoAxes() + NoLegend() + ggtitle(breakpoint)
+  i = i + 1
+}
+
+marrangeGrob(plots, nrow=2, ncol=2)
+ml <- marrangeGrob(plots, nrow=2, ncol=2)
+ggsave(filename = '408_sequential_clustering_umaps.pdf', path = file.path(output_dir_plot, '20220721_1'), ml)
+```
+
+```{r}
+plot_features_umap <- function(sobj, gene, pt.size = 3, space = "umap")
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- as.matrix(FetchData(sobj, gene))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df <- gene_df %>% dplyr::arrange(!is.na(expr), expr)
+  colors = c('grey90', 'grey90', '#CB2A55')
+  gene_df$expr[gene_df$expr == 0] = NA
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = expr)) + geom_point(size = pt.size, alpha = 0.8)+  
+            theme_classic() + ggtitle(gene) + NoAxes() + NoLegend() +  scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3], labels = NULL)  + theme(title = element_text(face = 'bold', size = rel(1), hjust = 1)) 
+  return(plot)
+}
+plot_features_umap(jy_408, 'VIP')
+```
+```{r fig.height=8, fig.width=18}
+genes = rownames(jy_408)
+plots <- lapply(1:length(genes), function(i){
+    plot_features_umap(jy_408, genes[i], pt.size = 1)
+  })
+umaps = plot_grid(plotlist = plots, label_size = 10)
+ggsave(plot = umaps, filename = 'test_408_umapl_expr_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 18, height = 8, dpi = 150)
+
+```
+```{r}
+plot_features_xy <- function(sobj, gene, pt.size = 12, space = "XY")
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- as.matrix(FetchData(sobj, gene))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df <- gene_df %>% dplyr::arrange(!is.na(expr), expr)
+  colors = c('grey90', 'grey90', '#CB2A55')
+  gene_df$expr[gene_df$expr == 0] = NA
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = expr)) + geom_point(size = pt.size, alpha = 0.8)+  
+            theme_classic() + ggtitle(gene) + NoAxes() + NoLegend() +  scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3], labels = NULL)  + theme(title = element_text(face = 'bold', size = rel(1), hjust = 1)) 
+  return(plot)
+}
+plot_features_xy(jy_408[,df_408$IMAGE.NAME == 'TC_1'], 'GSX2')
+```
+## Order the images
+```{r}
+unique(df_408$IMAGE.NAME)
+images_ordered = c('TC_Cortical3', 'TC_Cortical2', 'TC_Cortical1', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5', 'TC_4', 'TC_3', 'TC_2','TC_1','CC_2','CC_3',
+           'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10',
+           'CC_L2-1', 'CC_L2-2', 'CC_L2-3', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_408$X_horz = -1
+df_408$Y_horz = -1
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_408[df_408$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_408[df_408$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+```{r}
+hcoords = df_408 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_408))
+```
+
+```{r}
+plot_features_vertical_spatial <- function(sobj, gene, pt.size = 0.5, space = "H", arc = TRUE)
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- as.matrix(FetchData(sobj, gene))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df <- gene_df %>% dplyr::arrange(!is.na(expr), expr)
+  colors = c('grey90', 'grey90', '#0f4c5c')
+  gene_df$expr[gene_df$expr == 0] = NA
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = expr)) + geom_point(size = pt.size, alpha = 1)+  
+            theme_classic() + ggtitle(gene) + NoAxes() + NoLegend() + 
+    coord_fixed(ratio = 0.5) + scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3], labels = NULL)  + theme(title = element_text(face = 'bold', size = rel(0.5), hjust = 1)) 
+  if(arc){plot = plot + geom_hline(yintercept=660, linetype = "dashed",color = colors[3])}
+  return(plot)
+}
+plot_features_vertical_spatial(jy_408, gene = 'GSX2')
+```
+
+```{r}
+plot_features_vertical_spatial_smoothed <- function(sobj, gene, pt.size = 0.5, space = "H", arc = TRUE)
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  expmat <- as.matrix(FetchData(sobj, gene))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df <- gene_df %>% dplyr::arrange(!is.na(expr), expr)
+  colors = c('grey90', 'grey90', '#0f4c5c')
+  gene_df$expr[gene_df$expr == 0] = NA
+  plot <- gene_df %>%
+    filter(!is.na(expr)) %>%
+    ggplot(aes(x = X, y = Y, color = expr)) +stat_density_2d(aes(fill = ..density..), geom = "raster", n = 400,contour = FALSE, interpolate = TRUE) +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+#geom_bin2d(bins = 10) + #geom_point(size = pt.size, alpha = 1)+  
+            theme_classic() + ggtitle(gene) + NoAxes() + NoLegend() + 
+    coord_fixed(ratio = 0.5) + scale_color_gradient(na.value = colors[1], low = colors[2], high = colors[3], labels = NULL)  + theme(title = element_text(face = 'bold', size = rel(0.5), hjust = 1)) 
+  if(arc){plot = plot + geom_hline(yintercept=660, linetype = "dashed",color = colors[3])}
+  return(plot)
+}
+plot_features_vertical_spatial_smoothed(jy_408, gene = 'PAX6')
+```
+
+
+```{r fig.height=8, fig.width=18}
+genes = rownames(jy_408)
+plots <- lapply(1:length(genes), function(i){
+    plot_features_vertical_spatial_smoothed(jy_408, genes[i], pt.size = 1)
+  })
+verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+verts
+#ggsave(plot = verts, filename = 'test_408_vertical_expr_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 18, height = 8, dpi = 150)
+```
+
+## Do the clustering stuff here 
+```{r}
+plot_clusters_vertical_spatial <- function(sobj, cluster, clustering = NULL, anterior = FALSE, cluster_color =  '#CB2A55', pt.size = 1, space = "H", arc = TRUE)
+{
+  cluster_identity = as.numeric(unlist(ifelse(is.null(clustering),
+                                              Idents(sobj),sobj[[clustering]]))) == (cluster)
+  coordinates <- Embeddings(sobj, reduction = space)
+  gene_df <- as.data.frame(cbind(coordinates, cluster_identity))
+  colnames(gene_df) <- c('X', 'Y', 'clust')
+  gene_df <- gene_df %>% dplyr::arrange(clust)
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = factor(clust))) + geom_point(size = pt.size, alpha = 1) +  
+            theme_classic() + ggtitle(cluster) + NoAxes() + NoLegend() + 
+    coord_fixed(ratio = 0.5)  + theme(title = element_text(face = 'bold', size = rel(0.8), hjust = 1)) 
+  cluster_color = scales::hue_pal()(nrow(unique(sobj[[clustering]])))[cluster]
+  plot = plot + scale_colour_manual(values = c('grey90', cluster_color))
+  intercept = ifelse(anterior, 660, 484)
+  if(arc){plot = plot + geom_hline(yintercept=484, linetype = "dashed",color = cluster_color)}
+  return(plot)
+}
+plot_clusters_vertical_spatial(jy_408, pt.size = 1, cluster = 1, clustering = 'RNA_snn_res.1.5')
+```
+
+
+```{r}
+clusters = as.numeric(sort(unique(jy_408$RNA_snn_res.1.5)))
+plots <- lapply(1:length(clusters), function(i){
+    plot_clusters_vertical_spatial(jy_408, cluster = clusters[i], pt.size = 1, clustering = 'RNA_snn_res.1.5')
+  })
+verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+ggsave(plot = verts, filename = 'test_408_vertical_cluster_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 6, height = 8, dpi = 150)
+```
+
+```{r}
+plot_clusters_umap <- function(sobj, clustering, pt.size = 3, space = "umap")
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  #expmat <- sobj[[clustering]]
+  expmat  = Idents(sobj)
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df$X = as.numeric(gene_df$X)
+  gene_df$Y = as.numeric(gene_df$Y)
+  summary_gene_df = gene_df %>% dplyr::group_by(expr) %>% dplyr::summarise(xmean = mean(X), ymean = mean(Y))
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = as.factor(expr))) + geom_point(size = pt.size, alpha = 0.8)+ geom_label(data = summary_gene_df,
+                                                                                                                 mapping = aes(x = xmean, 
+                           y = ymean), 
+                           label = summary_gene_df$expr) +
+            theme_classic() + ggtitle(clustering) + NoAxes() + NoLegend()  + theme(title = element_text(face = 'bold', size = rel(1), hjust = 1)) 
+  cluster_colors = scales::hue_pal()(nrow(unique(expmat)))
+  plot = plot + scale_colour_manual(values = cluster_colors)
+  return(plot)
+}
+p = plot_clusters_umap(jy_408, clustering ='RNA_snn_res.1.5')
+p
+```
+
+```{r}
+scales::hue_pal()(3)
+```
+
+```{r}
+DimPlot(jy_408, cells.highlight = list('migratory' = which(grepl('MS', df_408$area))), cols.highlight = '#CB2A55')
+```
+
+```{r fig.height=3, fig.width=12}
+small_dimplot <- function(sobj, grep_pattern){
+  dp = DimPlot(jy_408, cells.highlight = list(imp = which(grepl(grep_pattern, df_408$area))))
+  dp <- dp + scale_color_manual(values = c('grey90', '#1982c4'), labels=c('other', grep_pattern)) + NoAxes()
+}
+
+patterns = c('408_CC', 'MS_CC', 'vMS_TC', 'dMS_TC', '408_TC')
+plots <- lapply(1:length(patterns), function(i){
+    small_dimplot(jy_408, grep_pattern = patterns[i])
+  })
+areas = plot_grid(plotlist = plots, label_size = 10, nrow = 2)
+ggsave(plot = areas, filename = 'test_408_area_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 12, height = 3, dpi = 150)
+```
+```{r}
+DimPlot(jy_408, cells.highlight = list('CC' = which(grepl('CC', df_408$area))), cols.highlight = '#CB2A55')
+```
+
+```{r}
+jy_164<- RenameCells(jy_164, c(outer('164_', 1:ncol(jy_164), FUN=paste0)))
+jy_164$area = df_164$area
+jy_408<- RenameCells(jy_408, c(outer('408_', 1:ncol(jy_408), FUN=paste0)))
+jy_408$area = df_408$area
+jy_all <- merge(jy_164, jy_408)
+```
+```{r}
+jy_all <- NormalizeData(jy_all, scale.factor = 1e5) ###
+normed = GetAssayData(jy_all, slot = 'data')
+normed[normed < 3] = 0
+jy_all <- SetAssayData(jy_all, slot = 'data', normed)
+```
+
+```{r}
+jy_all <- FindVariableFeatures(jy_all, selection.method = "vst")
+all.genes <- rownames(jy_all)
+jy_all <- ScaleData(jy_all, features = all.genes)
+jy_all <- RunPCA(jy_all, approx = FALSE)
+jy_all <- FindNeighbors(jy_all, dims = 1:30)
+jy_all <- FindClusters(jy_all, resolution = 1.5)
+jy_all <- RunUMAP(jy_all, dims = 1:30)
+
+DimPlot(jy_all,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+```{r}
+breakpoints = 1:20/10 + 0.1
+plots = list()
+jy_all <- FindNeighbors(jy_all, dims = 1:30)
+i = 1
+for (breakpoint in breakpoints){
+  jy_all <- FindClusters(jy_all, resolution = breakpoint)
+  jy_all <- RunUMAP(jy_all, dims = 1:30)
+  jy_all.markers <- FindAllMarkers(jy_all, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+  labels = jy_all.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 1, order_by = avg_log2FC)
+  new.cluster.ids <- labels$gene
+  names(new.cluster.ids) <- levels(jy_all)
+  jy_all <- RenameIdents(jy_all, new.cluster.ids)
+  plots[[i]] = DimPlot(jy_all, reduction = "umap", pt.size = 1, label = TRUE) + NoAxes() + NoLegend() + ggtitle(breakpoint)
+  i = i + 1
+}
+
+marrangeGrob(plots, nrow=2, ncol=2)
+ml <- marrangeGrob(plots, nrow=2, ncol=2)
+ggsave(filename = 'all_sequential_clustering_umaps.pdf', path = file.path(output_dir_plot, '20220721_1'), ml)
+```
+```{r fig.height=8, fig.width=14}
+big_dimplot <- function(sobj, grep_pattern){
+  dp = DimPlot(sobj, cells.highlight = list(imp = which(grepl(grep_pattern, sobj$area))))
+  dp <- dp + scale_color_manual(values = c('grey90', '#1982c4'), labels=c('other', grep_pattern)) + NoAxes()
+}
+patterns = c('408_CC', '408_MS_CC', 'vMS_TC', 'dMS_TC', '408_TC', '164_CC', '164_MS_CC', '164_MS_TC',  '164_TC')
+plots <- lapply(1:length(patterns), function(i){
+    big_dimplot(jy_all, grep_pattern = patterns[i])
+  })
+areas = plot_grid(plotlist = plots, label_size = 10, nrow = 3)
+areas
+ggsave(plot = areas, filename = 'test_all_area_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 14, height = 8, dpi = 150)
+```
+```{r}
+
+plot_clusters_umap(jy_all, clustering ='RNA_snn_res.1.5', pt.size = 2.0)
+```
+
+```{r}
+jy_all.markers <- FindAllMarkers(jy_all, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_all.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+```
+
+
+```{r}
+clusters_164 = jy_all$RNA_snn_res.1.5[1:ncol(jy_164)]
+jy_164$unified_clusters = clusters_164
+clusters_408 = jy_all$RNA_snn_res.1.5[(ncol(jy_164)+1):ncol(jy_all)]
+jy_408$unified_clusters = clusters_408
+```
+
+```{r fig.height=8, fig.width=4}
+clusters = as.numeric(sort(unique(jy_408$unified_clusters)))
+plots <- lapply(1:length(clusters), function(i){
+    plot_clusters_vertical_spatial(jy_408, cluster = clusters[i], pt.size = 1, clustering = 'unified_clusters', anterior = FALSE)
+  })
+verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+ggsave(plot = verts, filename = 'test_408_unified_vertical_cluster_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 5, height = 8, dpi = 150)
+```
+```{r fig.height=8, fig.width=5}
+clusters = as.numeric(sort(unique(jy_164$unified_clusters)))
+plots <- lapply(1:length(clusters), function(i){
+    plot_clusters_vertical_spatial(jy_164, cluster = clusters[i], pt.size = 1, clustering = 'unified_clusters', anterior = TRUE)
+  })
+verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+ggsave(plot = verts, filename = 'test_164_unified_vertical_cluster_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 5, height = 8, dpi = 150)
+```
+
+```{r fig.height=1, fig.width=8}
+genes = rownames(markers2)
+plots <- lapply(1:length(genes), function(i){
+    plot_features_umap(jy_all, genes[i], pt.size = 0.5)
+  })
+umaps = plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+umaps
+ggsave(plot = umaps, filename = 'cluster7_markers_all_umapl_expr_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 8, height = 1, dpi = 150)
+
+```
+
+```{r}
+jy_all_7.markers <- FindMarkers(jy_all, ident.1 = 7, ident.2 = NULL, only.pos = FALSE)
+markers2 = jy_all_7.markers %>%
+   slice_max(n = 5, order_by = avg_log2FC)
+markers2
+```
+```{r}
+new.cluster.ids = c('TBR1+/LRP8+ MS to TC', 
+              'PROX1 and NKX2.1 Immature INs',
+'Immature CALB2+ CGE interneuron',
+ 'Excitatory CXCL12+ Neurons',
+'Cajal Retzius Cells',
+'Mature, SST+ MGE INs',
+ 'Mature, VIP+ CGE INs',
+ 'MAF1+/TSHZ1+ Immature INs',
+ 'Layer 2 Excitatory Neurons',
+ 'CXCR4+ Posterior, MS to TC INs',
+'EMX1+/NKX2.1+ Anterior, MS to CC INs',
+ 'EMX1+/LHX6+ Posterior, MS to CC INs',
+ 'GSX2+/RELN+/PAX6+ Clump')
+
+```
+
+```{r}
+names(new.cluster.ids) <- levels(jy_all)
+jy_all <- RenameIdents(jy_all, new.cluster.ids)
+```
+
+```{r}
+library(ggrepel)
+plot_clusters_umap <- function(sobj, clustering, pt.size = 3, space = "umap")
+{
+  coordinates <- Embeddings(sobj, reduction = space)
+  #expmat <- sobj[[clustering]]
+  expmat  = as.character(Idents(jy_all))
+  gene_df <- as.data.frame(cbind(coordinates, expmat))
+  colnames(gene_df) <- c('X', 'Y', 'expr')
+  gene_df$X = as.numeric(gene_df$X)
+  gene_df$Y = as.numeric(gene_df$Y)
+  summary_gene_df = gene_df %>% dplyr::group_by(expr) %>% dplyr::summarise(xmean = mean(X), ymean = mean(Y))
+  plot <- ggplot(gene_df, aes(x = X, y = Y, color = as.factor(expr))) + geom_point(size = pt.size, alpha = 0.8) + #+ geom_label_repel(data = summary_gene_df,
+                                                                                                                # mapping = aes(x = xmean, 
+                           #y = ymean), 
+                           #label = summary_gene_df$expr) +
+            theme_classic() + ggtitle(clustering) + NoAxes() + #NoLegend()  + 
+    theme(title = element_text(face = 'bold', size = rel(1), hjust = 1)) 
+  cluster_colors = scales::hue_pal()(length(unique(expmat)))
+  plot = plot + scale_colour_manual(values = cluster_colors)
+  return(plot)
+}
+
+plot_clusters_umap(jy_all, clustering = '', pt.size = 2.0)
+```
+
+```{r}
+genes = rownames(jy_408)
+plots <- lapply(1:length(genes), function(i){
+    plot_features_vertical_spatial(jy_408, genes[i], pt.size = 1)
+  })
+verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
+ggsave(plot = verts, filename = 'test_408_vertical_expr_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 18, height = 8, dpi = 150)
+```
+

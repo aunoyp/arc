@@ -1,0 +1,1340 @@
+---
+title: "st_nn"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+July 21st, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+library(png)
+library(cowplot)
+library(magick)
+library(scales)
+library(packcircles)
+library(ggalt)
+library(cccd)
+library(stringr)
+library(ggfortify)
+library(circlize)
+library(reshape2)
+library(igraph)
+#library("leiden")
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+clump_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clumps'
+meta_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/overlay'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+### plot the meta data real quick
+```{r}
+meta_ntrscts = read.csv(file.path(clump_dir, 'meta', 'META_ntrsct.csv'), header = FALSE) %>%
+  as_tibble()
+```
+
+### Load the data
+```{r}
+df_408 <- load_slice(slice = "408")
+df_408 <- clean_408(df_408)
+df_408 <- embed_horizontal_408(df_408)
+```
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_408) = 1:nrow(df_408)
+jy_408 = df_408 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X_horz, Y_horz, clump)) %>%
+  t() %>%
+  CreateSeuratObject()
+jy_408$image <- df_408$IMAGE.NAME
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
+normed = GetAssayData(jy_408, slot = 'data')
+normed[normed < 3] = 0
+for(gene_name in rownames(jy_408)) {
+  mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+}
+jy_408 <- SetAssayData(jy_408, slot = 'data', normed)
+```
+
+```{r}
+jy_408 <- FindVariableFeatures(jy_408, selection.method = "vst")
+all.genes <- rownames(jy_408)
+jy_408 <- ScaleData(jy_408, features = all.genes)
+jy_408 <- RunPCA(jy_408, approx = FALSE)
+jy_408 <- FindNeighbors(jy_408, dims = 1:30)
+jy_408 <- FindClusters(jy_408, resolution = 0.8)
+jy_408 <- RunUMAP(jy_408, dims = 1:30)
+
+DimPlot(jy_408,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+```{r}
+jy_408.markers <- FindAllMarkers(jy_408, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+jy_408.markers %>%
+   group_by(cluster) %>%
+   slice_max(n = 32, order_by = avg_log2FC)
+
+```
+
+```{r}
+jy_408$clump = df_408$clump
+
+DimPlot(jy_408,  reduction = "umap", group.by = 'clump') + NoAxes() + NoLegend()
+
+```
+
+
+```{r}
+hcoords = df_408 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_408[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_408))
+```
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df_164 <- load_slice(slice = "164")
+df_164 <- clean_164(df_164)
+df_164 <- embed_horizontal_164(df_164)
+```
+
+## We have the coordinates for 408_TC and others
+```{r}
+rownames(df_164) = 1:nrow(df_164)
+jy_164 = df_164 %>%
+  dplyr::select(-c(area, IMAGE.NAME, X, Y, clump)) %>%
+  t() %>%
+  CreateSeuratObject()
+jy_164$image = df_164$IMAGE.NAME
+```
+
+## just set everything from below 1 in ratio to zero
+```{r}
+jy_164 <- NormalizeData(jy_164, scale.factor = 1e5) ###
+normed = GetAssayData(jy_164, slot = 'data')
+normed[normed < 3] = 0
+for(gene_name in rownames(jy_164)) {
+  mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+}
+jy_164 <- SetAssayData(jy_164, slot = 'data', normed)
+```
+
+```{r}
+jy_164 <- FindVariableFeatures(jy_164, selection.method = "vst")
+all.genes <- rownames(jy_164)
+jy_164 <- ScaleData(jy_164, features = all.genes)
+jy_164 <- RunPCA(jy_164, approx = FALSE)
+jy_164 <- FindNeighbors(jy_164, dims = 1:30)
+jy_164 <- FindClusters(jy_164, resolution = 0.8)
+jy_164 <- RunUMAP(jy_164, dims = 1:30)
+jy_164$clump <- df_164$clump
+
+DimPlot(jy_164,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+```{r}
+DimPlot(jy_164,  reduction = "umap", group.by = 'clump') + NoAxes() + NoLegend()
+```
+
+```{r}
+unique(df_164$IMAGE.NAME)
+images_ordered = c('TC_Cortical3', 'TC_Cortical2', 'TC_Cortical1', 'TC_10', 'TC_9', 'TC_8', 'TC_7', 'TC_6', 'TC_5', 'TC_4', 'TC_3', 'TC_2','TC_1','CC_2','CC_3',
+           'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_9', 'CC_8', 'CC_10',
+           'CC_L2-1', 'CC_L2-2', 'CC_L2-3', 'CC_Cortical1', 'CC_Cortical2')
+```
+
+```{r}
+x_horz = 1:length(images_ordered) * 35
+y_horz = rep(0, length(images_ordered))
+horz_embedding = data.frame()
+df_164$X_horz = -1
+df_164$Y_horz = -1
+
+images = list.files(meta_dir)
+for(i in 1:length(images_ordered)){
+    image_name = images_ordered[i]
+    print(image_name)
+    split_names = strsplit(image_name, '_')
+    cortex = toupper(split_names[[1]][1])
+    number = split_names[[1]][2]
+    number_csv = paste0('_', number, '.csv')
+    filename = images[grepl(cortex, images) & grepl(number_csv, images) & grepl('164', images)]
+    coordinates = read.table(file.path(meta_dir, filename), sep = ',', header = TRUE)
+    if(image_name == "CC_L2-1"){
+      coordinates = coordinates[c(1:37, 39:nrow(coordinates)), ]
+    }
+    ## checked already that lists are equal, missing 1, 18, 19 for now, layer 1 and others
+ 
+    ## so this is a little tricky, so need to get it right
+    ## Remember, it is the top right that the coordinate is coming from, but
+    ## the bottom right is the new coordinate space.
+    ## so first when we get the original coordinate space, to set to relative
+    ## of bottom would be the same X, but 1024 - Y
+    
+    ## push out the coordinates for better visualization
+    #x_repelled <- (512 - coordinates$X_Coordinate_In_pixels)
+    
+    
+    df_164[df_164$IMAGE.NAME == image_name, 'X_horz'] = (coordinates$X_Coordinate_In_pixels / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + y_horz[i]
+    df_164[df_164$IMAGE.NAME == image_name, 'Y_horz'] = ((1024-coordinates$Y_Coordinate_In_pixels) / 
+                                                      IMAGE_SIZE * IMAGE_LEN) + x_horz[i]
+}
+```
+
+```{r}
+hcoords = df_164 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
+colnames(hcoords) <- c('pixel_1', 'pixel_2')
+
+jy_164[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_164))
+```
+
+
+```{r}
+jy_164<- RenameCells(jy_164, c(outer('164_', 1:ncol(jy_164), FUN=paste0)))
+jy_164$area = df_164$area
+jy_408<- RenameCells(jy_408, c(outer('408_', 1:ncol(jy_408), FUN=paste0)))
+jy_408$area = df_408$area
+jy_all <- merge(jy_164, jy_408)
+```
+```{r}
+jy_all <- NormalizeData(jy_all, scale.factor = 1e5) ###
+normed = GetAssayData(jy_all, slot = 'data')
+normed[normed < 3] = 0
+for(gene_name in rownames(jy_all)) {
+  if (gene_name == 'DCX'){
+    mdn_gene_expr = 0.5
+    print('skip dcx')
+  } else if (!gene_name %in% c('COUPTF2', 'SP8')){
+    mdn_gene_expr = median(normed[gene_name, normed[gene_name, ] > 0])
+  }else{
+    mdn_gene_expr = quantile(normed[gene_name, normed[gene_name, ] > 0], .40)
+  }
+
+  normed[gene_name, normed[gene_name, ] < mdn_gene_expr] = 0
+}
+jy_all <- SetAssayData(jy_all, slot = 'data', normed)
+```
+
+```{r, fig.width=3, fig.height = 3}
+jy_all <- FindVariableFeatures(jy_all, selection.method = "vst")
+all.genes <- rownames(jy_all)
+jy_all <- ScaleData(jy_all, features = all.genes)
+jy_all <- RunPCA(jy_all, approx = FALSE)
+jy_all <- FindNeighbors(jy_all, dims = 1:30)
+jy_all <- FindClusters(jy_all, resolution = 0.5)
+jy_all <- RunUMAP(jy_all, dims = 1:30)
+
+DimPlot(jy_all,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
+```
+
+```{r}
+DimPlot(jy_all,  reduction = "umap", group.by = 'area') + NoAxes() # NoLegend()
+```
+```{r fig.width = 10, fig.height = 3}
+FeaturePlot(jy_all, c('CXCL12', 'CXCR4'), cells = which(FetchData(jy_all, 'GAD1') > 0), cols = c( '#F18F01', '#048BA8'), blend= TRUE) 
+```
+
+
+```{r}
+new.cluster.ids = c('CGE/LGE',
+                    'Ex',
+                    'TBR1+ CGE',
+                    'CALB2+DLX2+',
+                    'VIP+GAD1+',
+                    'SST+LHX6+',
+                    'MGE')
+
+```
+
+```{r}
+names(new.cluster.ids) <- levels(jy_all)
+jy_all <- RenameIdents(jy_all, new.cluster.ids)
+```
+
+```{r}
+## Need to extract as cell x position matrix (X, Y)
+## Let's start with 5 neighbors
+XY_164 = Embeddings(jy_164, 'H')
+neighbors = 5
+
+nn_graph = nng(XY_164, k = neighbors)
+#XY_408 = Embeddings(jy_408, 'H')
+```
+
+
+```{r}
+avg_same = c()
+avg_othr = c()
+for(i in 1:ncol(jy_164)){
+  ## so I am going to iterate through each cell
+  ## Get the class identity of the cell
+  class_cell = Idents(jy_164)[i]
+  ## Get the cells that are the same
+  nearest_neighbors = as.matrix(nn_graph[[i]])
+  neighbor_idents = Idents(jy_164)[nearest_neighbors[[1]]]
+  same_ixs = which(neighbor_idents == class_cell)
+  ## Get the cells that are not the same
+  othr_ixs = which(neighbor_idents != class_cell)
+  ## Get the avreage distance of same
+  same_obj = dist(XY_164[c(i, nearest_neighbors[[1]][same_ixs]), ])
+  avg_same = c(avg_same, mean(same_obj[1:length(same_ixs)]))
+  ## Get the avreage distance of not same
+  othr_obj = dist(XY_164[c(i, nearest_neighbors[[1]][othr_ixs]), ])
+  avg_othr = c(avg_othr, mean(same_obj[1:length(othr_ixs)]))
+}
+```
+
+```{r}
+tc_csv = read_csv('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump/164_TC_3_1_assignments.csv', col_names = FALSE)
+colnames(tc_csv) <- c('clump', 'asgnm')
+```
+
+```{r}
+example_list <- tc_csv[1, 2]
+```
+
+```{r}
+pre_str = example_list$asgnm
+pre_str
+```
+
+```{r}
+str1 <- gsub('\\]', '', gsub('\\[', '', pre_str))
+str2 <- gsub('u', '', gsub("'", '', str1))
+```
+
+```{r message = FALSE}
+## Load from 
+clumps_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump/clump_data/'
+
+clump_num_df = data.frame(img= character(0), y= integer(0), z = integer(0))
+colnames(clump_num_df) <- c('img', 'pixel_ext', 'clust_num')
+prev_clump = 'temp'
+tic()
+
+for(file_name in list.files(clumps_dir)){
+  ### If the file is an assignment file, skip
+  if(grepl('assignment', file_name)){
+    next
+  }
+  ### We need to isolate the name, pixel_ext, # of clusters
+  split_name = strsplit(file_name, '_')
+  clump_name = paste(split_name[[1]][1:3], collapse = "_")
+  pixel_ext = as.integer(strsplit(split_name[[1]][4], '[.]')[[1]][1])
+  ### Load the file
+  clump_csv <- read_csv(file.path(clumps_dir, file_name))
+  if(prev_clump != clump_name){
+    prev_clump = clump_name
+    print(clump_name)
+  }
+  num_clusters = nrow(clump_csv)
+  clump_num_df <- clump_num_df %>%
+  add_row(img = clump_name, pixel_ext = pixel_ext, clust_num = num_clusters)
+}
+toc()
+## 1644 seconds it taeks, so about half an hour. This is worth saving lol
+```
+
+```{r}
+## Save this difficultly made file
+saveRDS(clump_num_df, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_num_df.rds'))
+```
+
+```{r}
+## Get the order
+samp <- clump_num_df %>%
+  filter(pixel_ext == 1) %>%
+  arrange(clust_num)
+
+order = samp$img
+```
+
+
+```{r fig.width = 6, fig.height = 3}
+clump_num_df %>%
+  #filter(pixel_ext <= 10) %>%
+  arrange(clust_num) %>%
+  ggplot(aes(x = img, y = clust_num, group = factor(pixel_ext))) + 
+  geom_line(aes(color=factor(pixel_ext))) + 
+  geom_point(aes(color=factor(pixel_ext))) + 
+  scale_x_discrete(limits = order) + theme_classic() + RotatedAxis()
+```
+
+```{r}
+
+get_numeric_assignments <- function(assignment_str){
+  str1 <- gsub('\\]', '', gsub('\\[', '', assignment_str))
+  str2 <- gsub('u', '', gsub("'", '', str1))
+  return(as.numeric(unlist(strsplit(str2, ','))))
+}
+
+get_assignments <- function(assignment_str, image_name){
+  ### breakdown
+  assignment_list <- get_numeric_assignments(assignment_str)
+  if(length(assignment_list) == 0){
+    return(-1)
+  }
+  if(grepl('164', image_name)){
+    sdf <- df_164
+    sobj <- jy_164
+  }
+  else{
+    sdf <- df_408
+    sobj <- jy_408
+  }
+  img_name_abbr = gsub('..._', '', image_name)
+  cell_ixs <- which(sdf$IMAGE.NAME == img_name_abbr)
+  image_sobj <- sobj[, cell_ixs] 
+  cell_names <- colnames(image_sobj[, assignment_list])
+  ## just return the names
+  cells <- jy_all[, which(colnames(jy_all) %in% cell_names)]
+  ## Will we get the same response each time?
+  return(cells)
+}
+```
+
+
+
+```{r message = FALSE}
+### So I am going to make a clump DF and also going to update jy_all
+## Load from 
+clumps_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump/clump_data/'
+pixel_ext = '1'
+
+
+features = c("...1","Area", "Perim.", "Major", "Minor", "Angle",
+          "Circ.", "Feret", "%Area","MinFeret", "AR",
+          "Round", "Solidity"  )
+
+#jy_all$clump = "NaN"
+
+clump_df = data.frame()
+tic()
+#[501:length(list.files(clumps_dir))]
+for(file_name in list.files(clumps_dir)){
+  ### If the file is an assignment file, skip
+  if(!grepl(paste0('_', pixel_ext, '.csv'), file_name) || grepl('assignments', file_name)){ #|| grepl('164', file_name)){
+    next
+  }
+  print(file_name)
+  ### We need to isolate the name, pixel_ext, # of clusters
+  split_name = strsplit(file_name, '_')
+  clump_name = paste(split_name[[1]][1:3], collapse = "_")
+  assignment_name = paste0(clump_name, '_', pixel_ext, '_assignments.csv')
+  #pixel_ext = as.integer(strsplit(split_name[[1]][4], '[.]')[[1]][1])
+  ### Load the file
+  clump_name = gsub('Cortical_', 'Cortical', clump_name)
+  clump_name = gsub('L2_', 'L2-', clump_name)
+  clump_csv <- read_csv(file.path(clumps_dir, file_name))
+  clump_csv$...1 <- as.character(clump_csv$...1)
+  assignments_csv <- read_csv(file.path(clumps_dir, assignment_name), col_names = FALSE)
+  
+  temp <- data.frame()
+  gtemp <- data.frame()
+  ctype_names <- levels(Idents(jy_all))
+  for(i in 1:nrow(clump_csv)){
+    itr_name = paste0(clump_name, '_Clump_', i)
+    clump_csv[i, 1] = itr_name
+    assignment_str = assignments_csv[which(assignments_csv$X1 == itr_name), 2][[1]]
+    cells = get_assignments(assignment_str, clump_name)
+    ctypes <- matrix(0, 1, length(unique(Idents(jy_all))))
+    clump_expr <- matrix(NaN, 1, length(rownames(jy_all)))
+    if(class(cells) != "numeric"){
+      for(j in 1:ncol(cells)) {
+        ctype = which(ctype_names == Idents(cells)[[j]])
+        ctypes[ctype] = ctypes[ctype] + 1
+      }
+      clump_expr <- rowMeans(as.matrix(GetAssayData(cells, 'data')))
+      jy_all$clump[which(colnames(jy_all) %in% colnames(cells))] = clump_name
+    } 
+  else{
+      colnames(clump_expr) <- colnames(gtemp)
+    }
+    temp <- rbind(temp, ctypes)
+    ### This is to get average expression in clump
+    gtemp <- rbind(gtemp, clump_expr)
+  }
+  colnames(temp) <- ctype_names
+  colnames(gtemp) <- rownames(jy_all)
+  clump_csv_to_add <- clump_csv %>% dplyr::select(features)
+  clump_df <- rbind(clump_df, cbind(clump_csv_to_add, temp, gtemp))
+  #print(assignment_name)
+  #df_408 <- rbind(df_408, df_to_append)
+  ### Gotta make sure that the image names are the same, there are some discrepancies
+}
+## Save this difficultly made file
+saveRDS(clump_df, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df.rds'))
+toc()
+```
+
+```{r}
+clump_df_408 <- readRDS(file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df_408.rds'))
+```
+
+```{r}
+temporary
+```
+```{r}
+clump_df <- rbind(clump_df, clump_df_408)
+```
+
+```{r}
+saveRDS(clump_df, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df.rds'))
+```
+
+```{r}
+clump_df_164 <- readRDS(file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df_164.rds'))
+```
+```{r}
+clump_df <- rbind(clump_df_164, clump_df)
+```
+
+
+# START HERE
+```{r}
+clump_df <- readRDS(file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df.rds'))
+```
+
+
+
+```{r}
+clump_df %>%
+  ggplot(aes(x = Area, y = Perim.)) + geom_point()
+```
+```{r}
+clump_pca <- prcomp(clump_df[, 14:20], center = TRUE,scale. = TRUE)
+
+summary(clump_pca)
+
+```
+
+```{r}
+library(ggfortify)
+autoplot(clump_pca)
+```
+```{r}
+autoplot(clump_pca, data = clump_df, colour = 'stream')
+```
+```{r}
+clump_df$stream = "wrong"
+clump_df$stream[which(grepl('408_TC', clump_df$...1))] = "408_TC"
+clump_df$stream[which(grepl('164_TC', clump_df$...1))] = "164_TC"
+clump_df$stream[which(grepl('408_CC', clump_df$...1))] = "408_CC"
+clump_df$stream[which(grepl('164_CC', clump_df$...1))] = "164_CC"
+clump_df$stream[which(grepl('408_Cortical', clump_df$...1))] = "PCort"
+clump_df$stream[which(grepl('164_TC_Cortical', clump_df$...1))] = "ATCort"
+clump_df$stream[which(grepl('164_CC_Cortical', clump_df$...1))] = "ACCort"
+clump_df$stream[which(grepl('408_L2', clump_df$...1))] = "PL2"
+clump_df$stream[which(grepl('164_CC_L2', clump_df$...1))] = "AL2"
+```
+
+```{r}
+clump_df %>%
+  ggplot(aes(x = stream, y = Area)) + geom_violin()
+```
+
+## How many clumps are there?
+## How big are these clumps?
+## What percent of DCX positive cells are in clumps?
+
+```{r}
+asummary()
+```
+
+```{r}
+clump_df %>% group_by(stream) %>%
+summarize()
+```
+
+```{r}
+clump_df %>%
+  ggplot(aes(x = stream, y = Area)) + geom_violin()
+```
+
+```{r}
+clump_df$img <- str_split_fixed(clump_df$...1, "_Clump", 2)[, 1]
+```
+
+
+```{r fig.width = 10, fig.height = 10}
+clump_df %>%
+  ggplot(aes(x = stream, y = Area, color = 'TBR1+ CGE')) + geom_point(size = clump_df$Area / 10e4, ) + RotatedAxis()
+```
+
+```{r}
+
+subset_df <- clump_df %>%
+  filter(grepl('_', stream))
+
+clump_df %>%
+  filter(grepl('_', stream)) %>%
+  ggplot(aes(x = stream, y = ncell)) + geom_boxplot() + geom_point(size = subset_df$Area / 10e4, ) + RotatedAxis() + ylab('# DCX cells in clump')
+```
+```{r}
+clump_df %>%
+  filter(grepl('_', stream)) %>%
+  ggplot(aes(x = stream, y = Area)) + geom_boxplot() +  RotatedAxis()
+```
+
+```{r}
+library(umap)
+clump_umap <- umap(clump_pca$x)
+```
+```{r}
+umap_cds <- as.data.frame(clump_umap$layout)
+colnames(umap_cds) <- c('umap1', 'umap2')
+
+clump_df$umap1 <- umap_cds$umap1
+clump_df$umap2 <- umap_cds$umap2
+```
+
+```{r}
+clump_df %>%
+  filter(umap2 < 10) %>%
+  arrange(CALB2_pct) %>%
+  ggplot(aes(x = umap1, y = umap2, color = CALB2_pct)) + geom_point(size = 0.8, alpha = 0.8)
+```
+```{r}
+clump_df %>%
+  #filter(grepl('_', stream)) %>%
+  ggplot(aes(x = umap1, y = umap2, color = stream)) + geom_point(size = 0.8, alpha = 0.5)
+```
+
+```{r}
+clump_df$ncell <- rowSums(clump_df[, 14:20])
+```
+
+```{r}
+clump_df$MGE_pct <- clump_df$MGE / clump_df$ncell
+clump_df$TBR1_pct <- clump_df$`TBR1+ CGE` / clump_df$ncell
+clump_df$Ex_pct <- clump_df$Ex / clump_df$ncell
+clump_df$SST_pct <- clump_df$`SST+LHX6+` / clump_df$ncell
+clump_df$CALB2_pct <- clump_df$`CALB2+DLX2+` / clump_df$ncell
+clump_df$VIP_pct <- clump_df$`VIP+GAD1+` / clump_df$ncell
+clump_df$CGE_pct <- clump_df$`CGE/LGE` / clump_df$ncell
+```
+
+```{r}
+weird_cluster <- clump_df %>%
+  filter(umap2 > 10)
+```
+```{r}
+weird_cluster
+```
+```{r}
+clump_df$MGE_pct <- clump_df$MGE / clump_df$ncell
+clump_df$TBR1_pct <- clump_df$`TBR1+ CGE` / clump_df$ncell
+clump_df$Ex_pct <- clump_df$Ex / clump_df$ncell
+clump_df$SST_pct <- clump_df$`SST+LHX6+` / clump_df$ncell
+clump_df$CALB2_pct <- clump_df$`CALB2+DLX2+` / clump_df$ncell
+clump_df$VIP_pct <- clump_df$`VIP+GAD1+` / clump_df$ncell
+clump_df$CGE_pct <- clump_df$`CGE/LGE` / clump_df$ncell
+```
+
+```{r}
+#clump_df$order = hclust_avg$order
+bplot_df <- clump_df[hclust_avg$order, c(1, 21,25, 26:32)] %>%
+  filter(MGE_pct != 'NaN') %>%
+  pivot_longer(!c(...1, stream, ncell), names_to = "pct_type", values_to = "pct")
+```
+
+```{r fig.width = 18, fig.height = 3}
+bplot_df  %>%
+  filter(ncell > 5) %>%
+  #filter(grepl('164', stream)) %>%
+  ggplot(aes(x = ...1, y = pct, fill = pct_type)) +
+  geom_bar(position="stack", stat="identity")  +
+  theme(axis.text.x=element_blank()) + xlab('clump') #remove x axis labels) + xl
+```
+
+```{r}
+dist_mat <- dist(clump_pca$x, method = 'euclidean')
+hclust_avg <- hclust(dist_mat, method = 'average')
+plot(hclust_avg)
+```
+```{r}
+avg_same = c()
+avg_othr = c()
+for(i in 1:ncol(clump_df)){
+  ## so I am going to iterate through each cell
+  ## Get the class identity of the cell
+  class_cell = Idents(jy_164)[i]
+  ## Get the cells that are the same
+  nearest_neighbors = as.matrix(nn_graph[[i]])
+  neighbor_idents = Idents(jy_164)[nearest_neighbors[[1]]]
+  same_ixs = which(neighbor_idents == class_cell)
+  ## Get the cells that are not the same
+  othr_ixs = which(neighbor_idents != class_cell)
+  ## Get the avreage distance of same
+  same_obj = dist(XY_164[c(i, nearest_neighbors[[1]][same_ixs]), ])
+  avg_same = c(avg_same, mean(same_obj[1:length(same_ixs)]))
+  ## Get the avreage distance of not same
+  othr_obj = dist(XY_164[c(i, nearest_neighbors[[1]][othr_ixs]), ])
+  avg_othr = c(avg_othr, mean(same_obj[1:length(othr_ixs)]))
+}
+```
+
+```{r}
+clump_df$max_pct <- clump_df[, 26:32] %>%
+  apply(1, max)
+```
+
+```{r}
+clump_df$hmg_ix <- (clump_df$max_pct - (1/7)) / (1-1/7)
+```
+
+```{r}
+clump_df %>%
+  filter(!is.na(hmg_ix)) %>%
+  filter(ncell > 3) %>%
+ggplot(aes(x=hmg_ix)) + 
+  geom_histogram(color="black", fill="white")
+```
+
+```{r}
+clump_3 <- clump_df %>% filter(ncell>3)
+nctyp = 7
+btstrp = 1000
+
+null_dist = matrix(0, nrow = btstrp, ncol = nrow(clump_3))
+tic()
+for(k in 1:btstrp){
+  if(k %% 250 == 0){
+    print(k)
+  }
+  for(i in 1:nrow(clump_3)){
+     cells = clump_3$ncell[i]
+     samp <- rdunif(cells, 1 , 7)
+     mx_pct <- max(table(samp)) / cells
+     null_dist[k, i] = (mx_pct - (1/7)) / (1-1/7)
+  }
+}
+toc()
+```
+```{r}
+null_dist
+```
+
+```{r}
+hist(null_dist)
+```
+```{r}
+null_df <- as.data.frame(as.vector(colMeans(null_dist)))
+colnames(null_df) <- 'ixs'
+null_df$dist = 'null'
+null_df
+```
+
+```{r}
+true_df <- as.data.frame(cbind(clump_3$hmg_ix, 'true'))
+colnames(true_df) <- c('ixs', 'dist')
+mg_df <- rbind(null_df, true_df)
+mg_df$ixs <- as.numeric(mg_df$ixs)
+```
+
+```{r}
+mg_df %>%
+  ggplot(aes(x=ixs, color=dist)) +
+  geom_histogram(fill="white",  alpha=0.4, position="identity")
+```
+
+```{r}
+jy_all$clump
+```
+
+```{r}
+jy_all$in_clump <- 'Not in Clump'
+jy_all$in_clump[which(jy_all$clump != "NaN")] <- 'In Clump'
+```
+
+```{r}
+DotPlot(jy_all, features = c('CXCR4', 'CXCR7', 'EGFR', 'VLDLR', 'RELN', 'LRP8'), group.by = 'in_clump') + RotatedAxis()
+```
+
+```{r}
+jy_all$clump_stream <- paste(jy_all$area, jy_all$in_clump)
+```
+
+```{r}
+DotPlot(jy_all, features = c('CXCR4', 'CXCR7', 'EGFR', 'VLDLR', 'RELN', 'LRP8'), 
+        group.by = 'clump_stream') + RotatedAxis()
+```
+```{r fig.height = 5, fig.width = 14}
+DotPlot(jy_all, features = rownames(jy_all), group.by = 'clump_stream') + RotatedAxis()
+```
+```{r fig.width = 6, fig.height = 4}
+DimPlot(jy_all, group.by = 'in_clump', split.by = 'area', ncol = 5)
+```
+
+```{r}
+jy_all$avp = 'wrong'
+jy_all$avp[which(grepl('164', jy_all$area))] = '164'
+jy_all$avp[which(grepl('408', jy_all$area))] = '408'
+```
+```{r}
+jy_all$clump_stream2 <- paste(jy_all$avp, jy_all$in_clump)
+```
+
+```{r}
+jy_all$clump_plot = jy_all$clump
+jy_all$clump_plot[which(jy_all$clump_type != "True Clump")] = "NaN"
+```
+
+```{r}
+DotPlot(jy_all, features = c('CXCR4', 'LRP8', 'CXCR7', 'VLDLR', 'EGFR', 'CXCL12', 'CXCL14', 'RELN'), group.by = "avp") + RotatedAxis(
+)
+```
+## Define the specific clump types
+```{r}
+
+linear = c("164_TC_10_12",
+"164_TC_10_5",
+"164_TC_1_1",
+"164_TC_5_4",
+"164_TC_7_5",
+"164_TC_8_7",
+"164_TC_9_1",
+"164_TC_9_2",
+"408_CC_12_5",
+"408_TC_10_5",
+"408_TC_9_5")
+
+psuedolinear = c("408_Cortical_1_0",
+"408_TC_10_3",
+"164_TC_1_3",
+"164_TC_Cortical1_11",
+"164_CC_8_2",
+"164_CC_9_3",
+"164_CC_L2-1_5",
+"164_CC_L2-2_4",
+"164_TC_8_2",
+"164_TC_8_3",
+"164_TC_2_1",
+"164_TC_4_9",
+"164_TC_5_2",
+"164_TC_5_9",
+"164_TC_6_0",
+"164_TC_7_5",
+"164_TC_7_1",
+"164_TC_7_4",
+"164_TC_8_4",
+"408_TC_14_4",
+"408_TC_2_0",
+"408_TC_2_12",
+"408_TC_3_3",
+"408_TC_4_11",
+"408_TC_4_16",
+"408_tc_4_1",
+"408_TC_6_5",
+"164_TC_Cortical_2_1")
+
+big_clump = c("408_TC_7_4",
+"164_TC_1_0",
+"164_TC_3_1",
+"408_TC_11_1",
+"408_TC_12_0",
+"408_TC_13_0",
+"408_TC_14_0",
+"408_TC_5_3",
+"408_TC_15_2",
+"408_TC_3_1",
+"408_TC_3_0",
+"164_TC_6_6",
+"408_TC_11_1",
+"164_TC_Cortical1_5")
+
+```
+
+```{r}
+jy_all$clump_type = "NaN"
+jy_all$clump_type[which(jy_all$clump != "NaN")] = "Small Clump"
+jy_all$clump_type[which(jy_all$clump %in% linear)] = "Linear"
+jy_all$clump_type[which(jy_all$clump %in% psuedolinear)] = "Psuedo-Linear"
+jy_all$clump_type[which(jy_all$clump %in% big_clump)] = "True Clump"
+```
+```{r}
+DotPlot(jy_all, features = c('CXCR4', 'LRP8', 'CXCR7', 'VLDLR', 'EGFR', 'CXCL12', 'CXCL14', 'RELN'), group.by = "clump_type") + RotatedAxis(
+)
+```
+```{r}
+jy_all$clump_reduced = 'error'
+jy_all$clump_reduced[which(jy_all$clump_type %in% c('True Clump'))] = 'Clump'
+jy_all$clump_reduced[which(jy_all$clump_type %in% c('NaN', 'Small Clump', 'Linear', 'Psuedo-Linear'))] = 'Individual'
+```
+
+```{r}
+dp <- DotPlot(jy_all, features = c('CXCR4', 'CXCR7', 'EGFR', 'LRP8', 'VLDLR'), group.by = "clump_reduced") + RotatedAxis() + ylab("")
+
+ggsave(plot = dp, filename = 'clump_dot_plot.pdf', path = file.path(output_dir_plot, '20221212_1'), width = 12, height = 5, units = 'cm', dpi = 300)
+```
+```{r}
+jy_all$clump_stream <- paste(jy_all$area, jy_all$clump_type)
+```
+
+```{r}
+jy_all$clump_ctype <- paste(Idents(jy_all), jy_all$clump_reduced)
+```
+
+
+```{r}
+#DotPlot(jy_all[, which(grepl("TC", jy_all$area) & grepl("164", jy_all$area))], features = c('CXCR4', 'LRP8', 'CXCR7', 'VLDLR', 'EGFR', 'CXCL12', 'CXCL14', 'RELN'), group.by = "clump_ctype") + RotatedAxis() + coord_flip()
+DotPlot(jy_all, features = c('CXCR4', 'LRP8', 'CXCR7', 'VLDLR', 'EGFR', 'CXCL12', 'CXCL14', 'RELN'), group.by = "clump_ctype") + RotatedAxis() + coord_flip()
+```
+```{r}
+dp <- DotPlot(jy_all[, which(grepl('MS', jy_all$area))], features = c('CXCR4', 'LRP8', 'CXCR7', 'VLDLR', 'EGFR'), group.by = "clump_stream") + RotatedAxis() + ylab("")
+ggsave(plot = dp, filename = 'clump_dot_plot_typestream.pdf', path = file.path(output_dir_plot, '20221212_1'), width = 15, height = 15, units = 'cm', dpi = 300)
+```
+
+## Do a chord diagram that you like
+
+##   from to value
+## 1    a  A     1
+## 2    b  B     2
+## 3    c  C     3
+
+So for me, I need from cell type 1 to cell type 2
+
+Basically
+
+from   to.  value
+CT1.   CT1
+CT1 CT2
+CT1 CT3
+
+```{r}
+dp <- DotPlot(jy_all[, which(grepl('MS', jy_all$area))], features = c('CXCR4', 'LRP8', 'CXCR7', 'VLDLR', 'EGFR'), group.by = "clump_type") + RotatedAxis() + ylab("")
+ggsave(plot = dp, filename = 'clump_dot_plot_type.pdf', path = file.path(output_dir_plot, '20221212_1'), width = 12, height = 10, units = 'cm', dpi = 300)
+```
+
+
+```{r}
+classes <- levels(Idents(jy_all))
+n = length(classes)
+c1 = rep(classes, n)
+c2 = rep(classes, each=n)
+c_df <- as.data.frame(cbind(c1, c2))
+```
+
+```{r}
+XY_164 = Embeddings(jy_164, 'H')
+neighbors = 5
+
+nn_graph = nng(XY_164, k = neighbors)
+
+XY_408 = Embeddings(jy_408, 'H')
+nn_graph2 = nng(XY_408, k = neighbors)
+
+clusters_164 = Idents(jy_all)[1:ncol(jy_164)]
+Idents(jy_164) = clusters_164
+clusters_408 = Idents(jy_all)[(ncol(jy_164)+1):ncol(jy_all)]
+Idents(jy_408) = clusters_408
+```
+
+
+```{r}
+
+fill_adj_matrix <- function(nn_graph, jy_obj, adj_mat, undirected = TRUE){
+  adj_mat$val = 0
+  added = as.data.frame(matrix(-1, 1, 2))
+  colnames(added) = c('c1', 'c2')
+  for(i in 1:ncol(jy_obj)){
+    class_cell = Idents(jy_obj)[i]
+    ## Get the cells that are the same
+    nearest_neighbors = as.matrix(nn_graph[[i]])
+    neighbor_idents = Idents(jy_obj)[nearest_neighbors[[1]]]
+    for(n in 1:length(neighbor_idents)){
+      #print(c(i, n))
+      n_id = as.numeric(nearest_neighbors[[1]][n])
+      neighbor = neighbor_idents[n]
+      if(length(added$c2[which(added$c1 == i)] == n_id) > 0 &&
+         added$c2[which(added$c1 == i)] == n_id && undirected
+         ){
+          #print('dup')
+       } else{
+         #print('yup')
+        value = adj_mat$val[which(adj_mat$c1 == class_cell & adj_mat$c2 == neighbor)]
+        adj_mat$val[which(adj_mat$c1 == class_cell & adj_mat$c2 == neighbor)] = value + 1
+        added <- added %>% add_row(c1 = n_id, c2 = i)
+      }
+    }
+  }
+  return(adj_mat)
+}
+
+norm_adj_mat <- function(jy_obj, adj_mat){
+  idents <- levels(Idents(jy_obj))
+  for(ident in idents){
+     id_ct <- sum(Idents(jy_obj) == ident) * neighbors
+     adj_mat[which(adj_mat$c1 == ident), 3] = as.numeric(adj_mat[which(adj_mat$c1 == ident), 
+                                                          3]) / id_ct
+  }
+  return(adj_mat)
+}
+
+
+adj_mat1 <- fill_adj_matrix(nn_graph, jy_164, c_df)
+adj_mat2 <- fill_adj_matrix(nn_graph2, jy_408, c_df)
+
+#adj_mat1p <-norm_adj_mat(jy_164, adj_mat1)
+#adj_mat2p <-norm_adj_mat(jy_408, adj_mat2)
+```
+
+```{r}
+adj_mat_final <- as.data.frame(cbind(c1, c2, adj_mat1$val + adj_mat2$val))
+#adj_mat_final <- norm_adj_mat(jy_all, adj_mat_final)
+colnames(adj_mat_final) <- c('from', 'to', 'value')
+adj_mat_final$value <- as.numeric(adj_mat_final$value)
+```
+
+```{r}
+circos.clear()
+chordDiagram(adj_mat_final, self.link = 2)
+```
+```{r}
+df2 = data.frame(start = c("a", "b", "c", "a"), end = c("a", "a", "b", "c"))
+chordDiagram(df2, grid.col = 1:3, self.link = 1)
+title("self.link = 1")
+chordDiagram(df2, grid.col = 1:3, self.link = 2)
+title("self.link = 2")
+
+```
+```{r}
+mat <- dcast(adj_mat_final, from ~ to, value.var = "value") %>%
+  column_to_rownames("from") %>%
+  #mutate_all(.funs = readr::parse_number) %>%
+  as.matrix() 
+```
+```{r}
+circos.clear()
+chordDiagram(mat, self.link = 1, grid.col = get_cluster_colors(rownames(mat)), col = col_mat)
+```
+```{r}
+col_mat = matrix("#e5e5e5", nrow = nrow(mat), ncol = ncol(mat))
+diag(col_mat) <- get_cluster_colors(rownames(mat))
+#dim(col_mat) = dim(mat)  # to make sure it is a matrix
+```
+
+```{r}
+XYd_164 = Embeddings(jy_164[, which(grepl('CC', jy_164$area) & grepl('MS', jy_164$area))], 'H')
+XYv_164 = Embeddings(jy_164[, which(grepl('TC', jy_164$area) & grepl('MS', jy_164$area))], 'H')
+
+nnd_graph = nng(XYd_164, k = neighbors)
+nnv_graph = nng(XYv_164, k = neighbors)
+
+XYd_408 = Embeddings(jy_408[, which(grepl('CC', jy_408$area) & grepl('MS', jy_408$area))], 'H')
+XYv_408 = Embeddings(jy_408[, which(grepl('TC', jy_408$area) & grepl('MS', jy_408$area))], 'H')
+
+nnd_graph2 = nng(XYd_408, k = neighbors)
+nnv_graph2 = nng(XYv_408, k = neighbors)
+```
+
+```{r}
+stream = 'CC'
+
+adj_mat1 <- fill_adj_matrix(nn_graph, 
+                            jy_164[, which(grepl(stream, jy_164$area) & grepl('MS', jy_164$area))], 
+                            c_df, undirected = FALSE)
+adj_mat2 <- fill_adj_matrix(nn_graph2, 
+                            jy_408[, which(grepl(stream, jy_408$area) & grepl('MS', jy_408$area))], 
+                            c_df, undirected = FALSE)
+```
+```{r}
+adj_mat_final <- as.data.frame(cbind(c1, c2, adj_mat1$val + adj_mat2$val))
+#adj_mat_final <- norm_adj_mat(jy_all[, which(grepl(stream, jy_all$area) & grepl('MS', jy_all$area))], adj_mat_final)
+colnames(adj_mat_final) <- c('from', 'to', 'value')
+adj_mat_final$value = as.numeric(adj_mat_final$value)
+```
+
+```{r}
+check_adj_prob <- function(adj_mat){
+  types = unique(adj_mat$from)
+  for(ct in types){
+    sm <- sum(adj_mat[which(adj_mat$from == ct), 3])
+    print(sm)
+  }
+}
+check_adj_prob(adj_mat_final)
+```
+
+
+```{r}
+mat <- dcast(adj_mat_final, from ~ to, value.var = "value") %>%
+  column_to_rownames("from") %>%
+  #mutate_all(.funs = readr::parse_number) %>%
+  as.matrix() 
+
+circos.clear()
+chordDiagram(mat, self.link = 1, grid.col = get_cluster_colors(rownames(mat)), col = col_mat)
+```
+Okay, so I need a nodeID for each "unique type", so just the cell types
+
+```{r}
+### Need to set up the d: edges
+### and set the vertices: which are the node IDs
+#adj_mat_final
+net <- graph_from_adjacency_matrix(mat, mode = "directed", weighted = TRUE)
+```
+```{r}
+net <- simplify(net, remove.multiple = F, remove.loops = T)
+```
+
+```{r}
+plot(net, edge.arrow.size=.4, edge.curved=.5)
+```
+```{r}
+V(net)$color <- get_cluster_colors(V(net)$name)
+
+V(net)$size <- log(round(rowSums(mat) / neighbors)) * 7
+
+# The labels are currently node IDs.
+# Setting them to NA will render no labels:
+V(net)$label <- NA
+
+# Set edge width based on weight:
+E(net)$width <- log(E(net)$weight)
+
+#change arrow size and edge color:
+E(net)$arrow.size <- .2
+E(net)$edge.color <- "gray80"
+
+# We can even set the network layout:
+graph_attr(net, "layout") <- layout_with_fr(net)#net, center = 'CGE/LGE')
+plot(net, edge.arrow.size=.4, edge.curved=.5)
+```
+### First maek a heatmap from images and cell types
+```{r}
+jy_all$slice <- NA
+jy_all$slice[1:ncol(jy_164)] <- '164'
+jy_all$slice[(ncol(jy_164)+1):ncol(jy_all)] <- '408'
+jy_all$imgslice <- paste0(jy_all$slice, "_", jy_all$image)
+
+ids <- levels(Idents(jy_all))
+imgs <- unique(jy_all$imgslice)
+jy_matrix <- matrix(-1, length(imgs), length(ids))
+for(i in 1:length(imgs)){
+  img <- imgs[i]
+  obj <- jy_all[, which(jy_all$imgslice == img)]
+  tb <- table(factor(Idents(obj), levels = ids))
+  jy_matrix[i, ] <- tb / sum(tb)
+}
+```
+```{r fig.height = 2, fig.width = 6}
+rownames(jy_matrix) <- imgs
+colnames(jy_matrix) <- ids
+pheatmap(t(jy_matrix), cellwidth = 10, cellheight = 10, fontsize = 10,
+         cluster_cols = FALSE, cluster_rows = FALSE)
+```
+```{r}
+barplot(table(Idents(jy_all)), col = get_cluster_colors(levels(Idents(jy_all))), cex.names=0.7)
+```
+### Before permutation, lets just confirm that all neighbors are in same image
+We have found that 69 cells have neighbors in other images. This should not be
+the case and should be fixed in following analyses.
+```{r}
+
+same_img_check <- function(nn_graph, jy_obj){
+  counter = 0
+  for(i in 1:ncol(jy_obj)){
+    cell_img = jy_obj$image[i]
+    ## Get the cells that are the same
+    nearest_neighbors = as.matrix(nn_graph[[i]])
+    neighbor_imgs = jy_obj$image[nearest_neighbors[[1]]]
+    if(any(neighbor_imgs != cell_img)){
+      counter = counter + 1
+    }
+  }
+  return(counter)
+}
+print(same_img_check(nn_graph, jy_164))
+```
+
+
+### Need to run a permutation test
+```{r}
+
+get_interactions <- function(knn_graph, obj, classes, c_df){
+    c_df$val = 0
+    for(i in 1:ncol(obj)){
+      class_cell = Idents(obj)[i]
+      ## Get the cells that are the same
+      nearest_neighbors = as.matrix(nn_graph[[i]])
+      neighbor_idents = Idents(obj)[nearest_neighbors[[1]]]
+      for(neighbor in neighbor_idents){
+        value = c_df$val[which(c_df$c1 == class_cell & c_df$c2 == neighbor)]
+        c_df$val[which(c_df$c1 == class_cell & c_df$c2 == neighbor)] = value + 1
+      }
+    }
+    return(c_df)
+}
+### Iterate through all images
+### run 100 permutations, and get the p value from the real data
+permutations = 99
+neighbors = 5
+
+### Need to set up the dataframe
+classes <- levels(Idents(jy_all))
+n = length(classes)
+c1 = rep(classes, n)
+c2 = rep(classes, each=n)
+c_df <- as.data.frame(cbind(c1, c2))
+
+## will save all into 2 different matrices
+interaction_mat <- matrix(-1, nrow(c_df), length(imgs)) 
+avoidance_mat <- matrix(-1, nrow(c_df), length(imgs)) 
+
+## Need to create a jy_all embedding
+embed_164 <- Embeddings(jy_164, "H")
+embed_408 <- Embeddings(jy_408, "H")
+jy_all[["H"]] <- CreateDimReducObject(embeddings = rbind(embed_164, embed_408), key = "pixel_", assay = DefaultAssay(jy_all))
+
+for(i in 1:length(imgs)){
+  print(paste("Permuting image", i, "of", length(imgs)))
+  img <- imgs[i]
+  obj <- jy_all[, which(jy_all$imgslice == img)]
+  ### Create nn graph for real
+  XY_obj = Embeddings(obj, 'H')
+  nn_graph = nng(XY_obj, k = neighbors)
+  ### Iterate through each cell type
+  ### Compute the mean for this one
+  data_cts <- get_interactions(nn_graph, obj, classes, c_df)
+  obj_idents <- Idents(obj)
+  perm_matrix = matrix(NA, nrow(c_df), permutations)
+  for(permutation in 1:permutations){
+    Idents(obj) <- sample(Idents(obj))
+    perm_cts <- get_interactions(nn_graph, obj, classes, c_df)
+    perm_matrix[, permutation] <- perm_cts$val
+  }
+  interaction_mat[, i] <- rowSums(perm_matrix <= data_cts$val) / (permutations + 1)
+  avoidance_mat[, i] <- rowSums(perm_matrix >= data_cts$val) / (permutations + 1)
+  ## count the identities
+  tbl <- table(Idents(obj))
+  ## If the cell type does not exist in the image, do not count the P value for the
+  ## interaction... obviously
+  nonexist_ixs <- which(!(c_df$c1 %in% names(tbl)) | !(c_df$c2 %in% names(tbl)))
+  interaction_mat[nonexist_ixs, i] <- NA
+  avoidance_mat[nonexist_ixs, i] <- NA
+}
+```
+```{r}
+## Save this difficultly made files
+saveRDS(interaction_mat, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/', 'interaction_mat.rds'))
+saveRDS(avoidance_mat, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/', 'avoidance_mat.rds'))
+```
+
+```{r}
+plot_map <- interaction_mat
+plot_map[which(plot_map >= 0.05)] = NA
+pheatmap(plot_map, cluster_cols = FALSE, cluster_rows = FALSE, cex = 0.8)
+```
+
+```{r}
+sum(interaction_mat < 0.05, na.rm = TRUE)
+```
+
+```{r}
+min(rowMeans(interaction_mat, na.rm = TRUE))
+```
+
+```{r}
+rownames(avoidance_mat) <- paste0(c_df$c1, "->", c_df$c2)
+colnames(avoidance_mat) <- imgs
+rownames(interaction_mat) <- paste0(c_df$c1, "->", c_df$c2)
+colnames(interaction_mat) <- imgs
+```
+
+```{r}
+vms_labels <- c(paste0("164_", antr_TC_MS), paste0("408_", post_TC_MS))
+dms_labels <- c(paste0("164_", antr_CC_MS), paste0("408_", post_CC_MS))
+
+sub_mat <- interaction_mat[, dms_labels]
+avgs <- rowMeans(sub_mat < 0.05, na.rm = TRUE)
+#avgs
+```
+```{r}
+interaction_df <- c_df %>% add_column(value = avgs)
+colnames(interaction_df) <- c('from', 'to', 'value')
+mat <- dcast(interaction_df, from ~ to, value.var = "value") %>%
+  column_to_rownames("from") %>%
+  #mutate_all(.funs = readr::parse_number) %>%
+  as.matrix() 
+```
+```{r}
+net <- graph_from_adjacency_matrix(mat, mode = "directed", weighted = TRUE)
+```
+
+```{r}
+plot(net)
+```
+```{r}
+V(net)$color <- get_cluster_colors(V(net)$name)
+
+V(net)$size <- table(Idents(jy_all[, which(jy_all$imgslice %in% dms_labels)]))[V(net)$name] / 5
+
+# The labels are currently node IDs.
+# Setting them to NA will render no labels:
+V(net)$label <- NA
+
+# Set edge width based on weight:
+E(net)$width <- E(net)$weight * 15
+
+#change arrow size and edge color:
+E(net)$arrow.size <- .2
+E(net)$edge.color <- "blue1"
+
+# We can even set the network layout:
+graph_attr(net, "layout") <- layout_as_star(net, center = 'CGE/LGE')
+plot(net, edge.curved=.1)
+```
+
+```{r}
+pheatmap(avoidance_mat, cluster_cols = FALSE, cluster_rows = FALSE, cex = 0.8)
+```
+
+```{r}
+plot_clusters_vertical_spatial_no_grid(jy_408)
+```
+
+```{r fig.height=8, fig.width=3}
+clusters = levels(Idents(jy_408))
+plots <- lapply(1:length(clusters), function(i){
+    plot_clusters_vertical_spatial(jy_408, cluster = clusters[i], pt.size = 0.1)
+  })
+verts= plot_grid(plotlist = plots, label_size = 1, nrow = 1)
+#verts
+#ggsave(plot = verts, filename = 'jy_408_spatial_arc_sep.pdf', path = file.path(output_dir_plot, '20221212_1'), width = 7, height = 7, units = 'cm', dpi = 300)
+```
+
+```{r}
+od_idnts = c("MGE", "CGE/LGE", "TBR1+ CGE", "CALB2+DLX2+", "VIP+GAD1+", "SST+LHX6+", "Ex")
+pap = plot_clusters_vertical_spatial_no_grid(jy_408, pt.size = 0.1, x_width = 40, force_idents = od_idnts)
+#ggsave(plot = pap, filename = 'jy_408_spatial_arc_sep_od.pdf', path = file.path(output_dir_plot, '20221212_1'), width = 7, height = 7, units = 'cm', dpi = 300)
+pap
+```
+
+

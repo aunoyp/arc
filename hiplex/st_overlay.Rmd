@@ -1,0 +1,117 @@
+---
+title: "st_overlay"
+output: html_notebook
+---
+
+Written by Aunoy Poddar
+May 23rd, 2022
+
+# Process the puncta quantified raw data
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+## Import packages and functions
+```{r}
+library(Seurat)
+library(tictoc)
+library(ggplot2)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(gridExtra)
+```
+
+## Load the data
+```{r}
+data_dir = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/rethresholded'
+output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
+output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
+```
+
+### Merge both datasets and generate a metadata column that corresponds
+### to the cell #
+```{r}
+df = data.frame()
+for (file_name in list.files(data_dir)){
+  print(file_name)
+  #if(grepl('408_TC', file_name) | grepl('408_vMS', file_name)){
+  #  next
+  #}
+  df_to_append <- read.table(file.path(data_dir, file_name), sep = ',', header = TRUE)
+  while(length(ind <- which(df_to_append$Image.Name == "")) > 0){
+    df_to_append$Image.Name[ind] <- df_to_append$Image.Name[ind -1]
+  }
+  #df_to_append <- df_to_append %>%
+  #  dplyr::select(-1)
+  if(grepl('164', file_name)){
+    df_to_append <- df_to_append %>%
+      dplyr::select(-X)
+  }
+  colnames(df_to_append) <- toupper(colnames(df_to_append))
+  df_to_append <- df_to_append %>%
+    mutate(area = strsplit(file_name, '.csv')[[1]])
+  if(!is_empty(df)){
+    df_to_append <- df_to_append %>%
+          dplyr::select(colnames(df))
+  }
+  df <- rbind(df, df_to_append)
+}
+```
+
+### Add the cellnames as rownames
+```{r}
+rownames(df) <- c(outer(c('C'), 1:dim(df)[1], FUN=paste0))
+```
+
+### What we want to do is integrate this into the dataframe
+## and then we want to reintroduce back into the OG
+```{r}
+### 408_CC First
+
+ix_408_CC <- grepl('408', df$area) & grepl('CC', df$area)
+df_408_CC <- df[ix_408_CC, ]
+print(unique(df_408_CC$IMAGE.NAME))
+```
+
+```{r}
+## set x and y to zero
+df_408_CC$x = 0
+df_408_CC$y = 0
+
+### iterate through folder and add
+overlay_roi_files = '/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/overlay'
+for(filename in list.files(overlay_roi_files)) {
+  # open the file
+  rois = read_csv(file.path(overlay_roi_files, filename))
+  
+  # do some name editing
+  posterior_wcsv = strsplit(filename, "ROI_")[[1]][2]
+  posterior = strsplit(posterior_wcsv, ".csv")[[1]][1]
+  
+  # replace underscores with dashes
+  if(posterior == "L2_2" || posterior == "L2_1"){
+    posterior = str_replace(posterior, '_', '-')
+  }
+  
+  # get ixs
+  ixs = grepl(posterior, df_408_CC$IMAGE.NAME)
+  
+  print(posterior)
+  # add x and y
+  # This is to check that dimensions match
+  #print(paste('dim roi from images:', nrow(rois), ', dim of image.num', sum(ixs)))
+  df_408_CC[ixs, 'x'] = rois$X_Coordinate_In_pixels * 15 / 1024
+  df_408_CC[ixs, 'y'] = rois$Y_Coordinate_In_pixels * 15 / 1024
+}
+```
+
+```{r}
+
+```
+
+
