@@ -1,0 +1,251 @@
+---
+title: "Preprocessing"
+output: html_notebook
+---
+
+# Details
+Aunoy Poddar
+April 14th, 2023
+
+```{r setup}
+require(knitr)
+#opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+# Import Libraries and declare file paths
+```{r}
+library(Seurat)
+library(SeuratData)
+library(tictoc)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(cowplot)
+library(SeuratObject)
+library(pracma)
+library(purrr)
+library(DoubletFinder)
+source("/wynton/home/paredes/aunoy/src/preprocess_helper.R")
+options(Seurat.Object.assay.version = "v5")
+library(ape)
+```
+
+```{r}
+# Set file paths and read the filtered directories from a text file
+filedir = "/wynton/group/paredes/Aunoy/human_cellbender"
+txt_file = file.path("/wynton/group/paredes/Aunoy/human_cellranger/", 'etc.txt')
+filt_dirs <- scan(txt_file, what="", sep="\n")
+```
+
+# Preprocess function
+
+Here is the psuedocode:
+Load the data file
+- first identify the #barcodes versus # transcripts per barcode
+- filter out cells with low gene count
+- quantify mito
+- quantify ribo
+- plot violin with ribo, mito and gene count
+- do quick PCA with ribo, mito, and gene
+- user input to select
+  - ribo
+  - mito
+  - n_counts
+- Filter
+- Scrublet
+- Save
+
+```{r}
+## Here is the psuedo logic
+### Generate a list of filtered h5 files
+files = list.files(filedir)
+files = files[grepl('_filtered.h5', files)]
+
+### Create the names used to refer to these samples
+samples = c("2018-023_Arc", "2018-003_aArc","2018-003_pArc")
+seurat_vector = c()
+
+### Set the output directory of teh barcodes
+out_dir = "/wynton/group/paredes/Aunoy/output"
+
+for(i in 1:length(files)){
+  #if(i < 7) {
+  #  next
+  #}
+  ## Create directory for saving output files
+  print(paste0("Initializing dirs for ", i, " of ", length(files), "..."))
+  iter_out_dir = file.path(out_dir, filt_dirs[i])
+  if(!dir.exists(iter_out_dir)){
+    dir.create(iter_out_dir)
+  }
+  
+  ## Set timestamp for naming
+  timestamp = format(Sys.time(), "%Y_%m_%d")
+  
+  ## Initiate pdf device image to save plots
+  plot_dir = file.path(iter_out_dir, paste0(timestamp, "_", filt_dirs[i], "_metrics"))
+  if(!dir.exists(plot_dir)){
+    dir.create(plot_dir)
+  }
+  
+  ## Load Data
+  if(i != -1){
+  print(paste0("Loading file ", i, " of ", length(files), "..."))
+  print(paste0("Sample name: ", filt_dirs[i]))
+  temp.data = Read10X_h5(file.path(filedir, files[i]))
+  #metrics = read.csv(file.path('/wynton/group/paredes/Aunoy/human_cellranger', filt_dirs[i], "outs/metrics_summary.csv"))
+  }
+  ## Record initial cell x gene estimate
+  n_genes = nrow(temp.data)
+  post_CR_cells = ncol(temp.data)
+  ## Filter out cells with low gene count (less than 1)
+  if(i != -1){
+  temp <- CreateSeuratObject(counts = temp.data, project = samples[i], min.cells = 1, min.features = 1)
+  }
+  
+  ## Record UMIs with at least one read
+  initial_UMI = ncol(temp)
+  
+  ## Visualize barcode abundance
+  #print("Visualizing Barcode Abundance...")
+  #threshold <- plot_barcode_abundance(temp, metrics, 
+  #                                    plot_dir = plot_dir)
+  
+  ## Check if user likes the threshold
+  #threshold <- confirm_barcode_abundance(temp, metrics, threshold, 
+  #                                       plot_dir = plot_dir)
+  ## Turn off dev new from plot barcode abundance
+  #dev.off()
+  
+  ## Filter cells based on threshold
+  #temp = filter_cells(temp, threshold)
+  
+  ## Record high quality barcode number
+  hq_bcodes = ncol(temp)
+
+  ## Plot number of transcript metrics
+  print("Plotting QC Metrics...")
+  
+  ## Remove any NA for mitochondrial RNA
+  temp <- get_QC_metrics(temp)
+  plot_QC_metrics(temp, plot_dir)
+  mr_cutoffs = input_qc_cutoffs()
+  temp = filter_mt_ribo(temp, mr_cutoffs)
+  ## Turn off dev new from plot QC
+  dev.off()
+  
+  ## Record post-processed bcode number
+  pp_bcodes = ncol(temp)
+  
+  ## Run doublet finder
+  print("Running DoubletFinder...")
+  temp = filter_doublets(temp, plot_dir = plot_dir)
+  
+  ## Record post-doublet finder bcode
+  singlet_barcodes = ncol(temp)
+  
+  ## Save barcodes
+  print("Saving Barcodes...")
+  bcode_fn = paste0(timestamp, "_", filt_dirs[i], "_barcodes.rds")
+  saveRDS(as.data.frame(colnames(temp)), file.path(iter_out_dir, bcode_fn))
+  
+  ## Format filter summary
+  summary = paste0("# library barcodes: ", post_CR_cells,
+                   "\n# genes: ", n_genes,
+                   "\n# barcodes recovered: ", initial_UMI,
+                   "\n# high quality barcodes:", hq_bcodes,
+                   "\n# post-processed barcodes:", pp_bcodes,
+                   "\n# singlets:", singlet_barcodes)
+  pdf(file.path(plot_dir, "summary.pdf"))
+  plot.new()
+  text(x=0.2, y=0.8, summary)
+  dev.off()
+}
+```
+
+```{r}
+## Here is the psuedo logic
+### Load each filtered one into a mega one
+files = list.files(filedir)
+path = "outs/raw_feature_bc_matrix"
+### 2018 003
+samples = c("2018-023_Arc", "2018-003_aArc","2018-003_pArc")
+seurat_vector = c()
+bcodedir = "/wynton/group/paredes/Aunoy/output/"
+date_of_preprocess = "2023_04_13"
+
+out_dir = "/wynton/group/paredes/Aunoy/output"
+for(i in 1:length(files)){
+  tic()
+  ## Load the filtered h5 file from before
+  print(paste0("Loading file ", i, " of ", length(files), "..."))
+  temp.data = Read10X(data.dir = file.path(filedir, filt_dirs[i], path))
+  temp <- CreateSeuratObject(counts = temp.data, project = samples[i])
+  
+  ### Get high quality barcodes saved from previous barcode filtereing step
+  barcode_file = file.path(bcodedir, filt_dirs[i], paste0(date_of_preprocess, '_', 
+                                                          filt_dirs[i], "_barcodes.rds"))
+  barcodes = readRDS(barcode_file)
+  colnames(barcodes) <- c("bc")
+  
+  ### Add high quality barcode cells to a vector of seurat objects
+  seurat_vector = c(seurat_vector, temp[, colnames(temp) %in% barcodes$bc])
+  toc()
+} 
+```
+
+```{r}
+### Merge vector of seurat objects
+human_arc = merge(seurat_vector[[1]], y = seurat_vector[2:length(seurat_vector)], add.cell.ids = samples, project = 'human_arc')
+```
+
+# Seurat Processing pipeline
+
+```{r}
+human_arc <- NormalizeData(human_arc, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+```{r fig.width = 10, fig.height = 6}
+human_arc <- FindVariableFeatures(human_arc, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(human_arc), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(human_arc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+
+```{r}
+all.genes <- rownames(human_arc)
+human_arc <- ScaleData(human_arc, features = all.genes)
+```
+
+```{r}
+human_arc <- RunPCA(human_arc, features = VariableFeatures(object = human_arc))
+```
+
+```{r}
+ElbowPlot(human_arc)
+```
+
+```{r, fig.height = 10, fig.height = 10}
+DimHeatmap(human_arc, dims = 1:15, cells = 500, balanced = TRUE)
+```
+
+```{r}
+human_arc <- FindNeighbors(human_arc, dims = 1:30)
+human_arc <- FindClusters(human_arc, resolution = 0.5)
+```
+
+```{r}
+human_arc <- RunUMAP(human_arc, dims = 1:30)
+```
+
+```{r}
+saveRDS(human_arc, "/wynton/group/paredes/Aunoy/human_arc_cb.rds")
+```
+

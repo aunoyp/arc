@@ -1,0 +1,267 @@
+---
+title: "Integration_Analysis"
+output: html_notebook
+---
+
+## Aunoy Poddar
+## Friday December 22, 2023
+## This notebook is designed to take cca-integrated data from Shi et al
+## and from our human arc data and quantify the extent of co-clustering
+## between celltypes in order to identify relationships between early interneuron
+## progenitors and migratory inhibitory neuroblasts identified in the arc.
+## Next, this data along with lineage inference data generated from CellRank
+## is merged into a sankey diagram to visualize the trajectories of cells from
+## the GE, to the Arc, and finally to cortical, striatal, and olfactory bulb
+## terminal fates. This makes up the bulk of the analysis shown in Fig. 2.
+
+```{r}
+library(Seurat)
+#library(SeuratData)
+library(SeuratWrappers)
+#library(SeuratDisk)
+#library(SeuratData)
+library(tictoc)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(cowplot)
+library(pracma)
+library(slingshot)
+options(Seurat.Object.assay.version = "v5")
+options(future.globals.maxSize = 8000 * 1024^2)
+library(data.table)
+library(paletteer)
+library(ggsankey)
+source("/wynton/home/paredes/aunoy/src/visualization_helper.R")
+```
+
+# CCA Integration with GE prenatal and late prenatal Arc data
+```{r}
+## Load data
+arc_shi <- readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/arc_shi.rds")
+```
+
+
+```{r}
+## Generate nearest neighbor graph, cca_clusters, and UMAP
+arc_shi <- JoinLayers(arc_shi)
+arc_shi <- FindNeighbors(arc_shi, reduction = "integrated.cca", dims = 1:30)
+arc_shi <- FindClusters(arc_shi, resolution = 1.5, cluster.name = "cca_clusters")
+arc_shi <- RunUMAP(arc_shi, reduction = "integrated.cca", dims = 1:30, reduction.name = "umap.cca")
+```
+
+```{r}
+## Visualize data
+DimPlot(
+  arc_shi,
+  reduction = "umap.cca",
+  group.by = c("class"),
+  split.by = "dataset",
+  label = TRUE,
+  combine = FALSE, label.size = 2
+)
+```
+
+```{r}
+## Visualize split by dataset
+DimPlot(arc_shi, reduction = "umap.scvi", group.by = "class", split.by = "dataset", label = TRUE) + 
+  NoLegend()
+```
+
+
+```{r}
+## Assign labels based on clustering
+arc_shi$identity = "error"
+arc_shi$identity[arc_shi$cca_clusters %in% c("23", "28", "27",
+                                             "12", "21", "19",
+                                             "15", "29", "25")] = "Progenitor"
+arc_shi$identity[arc_shi$cca_clusters %in% c("17", "13", "16")] = "Glia"
+arc_shi$identity[arc_shi$cca_clusters %in% c("30")] = "Endothelial"
+arc_shi$identity[arc_shi$cca_clusters %in% c("26")] = "OPC"
+arc_shi$identity[arc_shi$cca_clusters %in% c("24")] = "Microglia"
+arc_shi$identity[arc_shi$cca_clusters %in% c("3")] = "Exc/Thalamic"
+arc_shi$identity[arc_shi$cca_clusters %in% c("22", "20", "14", "9", "11", "4")] = "LGE-Derived"
+arc_shi$identity[arc_shi$cca_clusters %in% c("5", "7", "8", "2", "18", "6")] = "MGE-Derived"
+arc_shi$identity[arc_shi$cca_clusters %in% c("0", "1", "10", "31")] = "CGE-Derived"
+## Check that all were assigned.
+print(unique(arc_shi$cca_clusters[arc_shi$identity == "error"]))
+DimPlot(arc_shi, reduction = "umap.cca", group.by= "identity", label = TRUE)
+```
+
+
+```{r}
+## Visualize assignments
+DimPlot(arc_shi, reduction = "umap.cca", group.by= "class", label = TRUE, shuffle = TRUE)
+```
+
+```{r}
+## Pull out arc specific barcodes for the sankey diagram
+arc = arc_shi[, arc_shi$dataset == "arc"]
+```
+
+## Sankey Diagram
+```{r}
+## Take the "identity" label taken from the previous cca co_clustering
+sankey_df = arc@meta.data[c("identity", "class")]
+```
+
+```{r}
+## Use the make_long function from gg_sankey to format for plotting
+sdf = sankey_df %>%
+  #filter(class %in% c("Inh CGE", "Inh LGE", "Inh MGE", "Inh CGE/LGE")) %>%
+  #filter(fate != "error") %>%
+  make_long(identity, class)
+```
+
+
+```{r}
+## Order the nodes
+
+node_order = c(rev(c("Progenitor", "OPC","Microglia",
+               "MGE-Derived","CGE-Derived","LGE-Derived","Glia","Endothelial","Exc/Thalamic")), 
+               rev(c("Inh MGE", "Inh CGE","Inh CGE/LGE", "Inh LGE")))#, 
+              # rev(c("MGE_Str", "MGE_Ctx", "CGE_Ctx", "LGE_OB","LGE_MSN")))
+
+node_order =  c(rev(c("Progenitor", "OPC","Microglia",
+               "MGE-Derived","CGE-Derived","LGE-Derived","Glia","Endothelial","Exc/Thalamic")),
+               "Ast", "Ast/Rgl", "Cpl", "End", "Epd", "Exc", "Gli IPC", "Inh CGE", 
+               "Inh CGE/LGE", "Inh IPC", "Inh LGE", "Inh MGE", "Mcg",  "Oli", "Rbc")
+
+sdf$node = factor(sdf$node, levels = c(node_order))
+```
+
+```{r}
+## Want to remove connections between nodes that make up less than 5% of the
+## origins for a particular arc class. For example, if less than 5% of Arc
+## CGE-derived neurons co-cluster with GE microglia, then that connection will
+## not be visualized even if it is non-zero. 
+
+sdf_quants = sdf %>%
+  filter(!is.na(next_node)) %>%
+  group_by(node, next_node) %>%
+  summarise(group_count = n()) %>%
+  mutate(total_rows_next_node = sum(group_count)) %>%
+  group_by(node) %>%
+  mutate(
+    is_greater_than_5_percent = group_count > 0.05 * total_rows_next_node,
+    percent_of_total = group_count / total_rows_next_node * 100
+  ) %>%
+  ungroup()
+cell_table = table(arc$class)
+sdf_quants$cellcount = cell_table[sdf_quants$next_node]
+bad = sdf_quants[sdf_quants$group_count < 0.05 * sdf_quants$cellcount,]
+```
+
+```{r}
+## Remove things less than 5%
+bad = bad[!is.na(bad$node), ]
+for(i in 1:nrow(bad)){
+  sdf = sdf[!(sdf$node == as.character(bad$node[i]) & 
+                          sdf$next_node == as.character(bad$next_node[i])), ]
+}
+```
+
+
+## THIS IS FOR FULL GRAPH
+
+```{r}
+## Load the fate probabilities generated from CellRank
+fate_probs = as.data.frame(read_csv("/wynton/group/paredes/Aunoy/fate_df.csv"))
+```
+
+```{r}
+## Classify terminal fate for Arc cell based on the maximally probable outcome
+## computed from CellRank
+
+fp_ix = match(colnames(arc), sub("_[^_]+$", "", fate_probs$barcode))
+fp_arc = fate_probs[fp_ix[!is.na(fp_ix)], ]
+
+fp_max =  colnames(fp_arc[, 2:ncol(fp_arc)])[apply(fp_arc[, 2:ncol(fp_arc)],1,which.max)]
+
+fp_arc$fate = fp_max
+```
+
+```{r}
+## Assign to error to check if any were unassigned
+arc$fate = "error"
+## Assign fate based on barcode similarity between fp_arc dataframe and arc dataframe
+arc$fate[colnames(arc) %in% sub("_[^_]+$", "", fp_arc$barcode)] = fp_arc$fate[fp_ix[!is.na(fp_ix)]]
+#match(colnames(arc),sub("_[^_]+$", "", fp_arc$barcode))
+```
+
+```{r}
+## Now incorporate terminal fate data
+sankey_df = arc@meta.data[c("identity", "class", "fate")]
+```
+
+
+```{r}
+## Create sankey diagram with only Inh neuroblast classes visualized
+sdf = sankey_df %>%
+  filter(class %in% c("Inh CGE", "Inh LGE", "Inh MGE", "Inh CGE/LGE")) %>%
+  filter(fate != "error") %>%
+  make_long(identity, class, fate)
+```
+
+```{r}
+node_order =  c(rev(c("Progenitor", "OPC","Microglia",
+               "MGE-Derived","CGE-Derived","LGE-Derived","Glia","Endothelial","Exc/Thalamic")),
+               "Ast", "Ast/Rgl", "Cpl", "End", "Epd", "Exc", "Gli IPC", "Inh CGE", 
+               "Inh CGE/LGE", "Inh IPC", "Inh LGE", "Inh MGE", "Mcg",  "Oli", "Rbc",
+               rev(c("MGE_Str", "MGE_Ctx", "CGE_Ctx", "LGE_OB","LGE_MSN")))
+sdf$node = factor(sdf$node, levels = c(node_order))
+
+```
+
+
+```{r}
+# Chart 1
+pl <- ggplot(sdf, aes(x = x
+                     , next_x = next_x
+                     , node = node
+                     , next_node = next_node
+                     , fill = factor(node)
+                     , label = node)
+             )
+pl <- pl +geom_sankey(flow.alpha = 0.5
+                      , node.color = "black"
+                      ,show.legend = FALSE)
+#pl <- pl +geom_sankey_label(size = 3, color = "black", fill= "white", hjust = -0.5)
+pl <- pl +  theme_bw()
+pl <- pl + theme(legend.position = "none")
+pl <- pl +  theme(axis.title = element_blank()
+                  , axis.text.y = element_blank()
+                  , axis.ticks = element_blank()  
+                  , panel.grid = element_blank())
+#pl <- pl + scale_fill_viridis_d(option = "inferno")
+pl <- pl + scale_fill_manual(values = c('MGE-Derived'    = "#e377c2",
+                                        'CGE-Derived'    = "#98df8a",
+                                        'LGE-Derived'    = "#aec7e8",
+                                        'Inh MGE'    = "#ff9896",
+                                        'Inh CGE'    = "#2ca02c",
+                                        'Inh CGE/LGE'    = "#17becf",
+                                        'Inh LGE'    = "#1f77b4",
+                                        'MGE_Str'    = "#ff7f0e",
+                                        'MGE_Ctx'    = "#d62728",
+                                        'CGE_Ctx'    = "#165016",
+                                        'LGE_OB'    =  "#1f77b4",
+                                        'LGE_MSN'    = "#aec7e8"))
+
+color_mapping <- data.table(
+  color = c(
+    "#1f77b4", "#17becf", "#aec7e8", # CGE Colors
+    "#98df8a", "#9467bd", # CGE/LGE and inh ipc
+    "#bcbd22", "#ffbb78", "#2ca02c", #LGE
+    "#8c564b", "#d62728", "#ff9896", "#ff7f0e",
+    "#e377c2", "#7f7f7f")
+)
+                                        
+                                        
+pl <- pl + labs(fill = 'Nodes')
+pl
+```
+
+
+
