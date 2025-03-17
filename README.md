@@ -10,12 +10,12 @@ Cortical GABAergic interneurons generated in the ventral developing brain travel
 
 
 # Single-Nucleus RNA Sequencing of Human Arc
-![Figure_2B_Arc_UMAP_Representation](https://github.com/aunoyp/arc/tree/main/readme_figs/Fig_2B_UMAP.png?raw=true)
-
+![Figure_2B_Arc_UMAP_Representation](https://github.com/aunoyp/arc/blob/main/readme_figs/Fig_2B_UMAP.png?raw=true)
 
 ## Preprocessing Files
-
-## Integration Scripts
+FASTQ Files uploaded to GEO Browser (INSERT LINK). 
+Post-Cellbender corrected count matrices filtered to remove cells expressing high percentages of mitochondrial and ribosomal RNA and run through the DoubletFinder 2.0.3 R package to remove doublets.
+Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter thresholds saved in <THIS DIRECTORY>).
 
 ## CellRank
 
