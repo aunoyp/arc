@@ -10,7 +10,7 @@ Cortical GABAergic interneurons generated in the ventral developing brain travel
 
 
 # Single-Nucleus RNA Sequencing of Human Arc
-![alt text](https://github.com/aunoyp/arc/readme_figs/Fig_2B_UMAP.png?raw=true)
+![Figure_2B_Arc_UMAP_Representation](https://github.com/aunoyp/arc/tree/main/readme_figs/Fig_2B_UMAP.png?raw=true)
 
 
 ## Preprocessing Files
