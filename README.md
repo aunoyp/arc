@@ -18,12 +18,19 @@ Post-Cellbender corrected count matrices filtered to remove cells expressing hig
 Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter thresholds saved in <THIS DIRECTORY>).
 
 ## CellRank
+LINK TO CELLRANK
 
 ## Monocle
+LINK TO MONOCLE
 
 ## WGCNA
-
+LINK TO WGCNA
 
 # Spatial Transcriptomic Analysis of Piglet Arc Migratory Streams
 
+## Loading Image Data
+LINK TO PREPROCESSING FXNS
+
+## Nearest Neighbor Analysis
+Adapated from the histoCAT neighborhood analysis interaction score.
 
