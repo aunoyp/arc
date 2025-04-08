@@ -15,7 +15,6 @@ require(knitr)
 # Import Libraries and declare file paths
 ```{r}
 library(Seurat)
-library(SeuratData)
 library(tictoc)
 library(plyr)
 library(dplyr)
@@ -95,7 +94,7 @@ for(i in 1:length(files)){
   print(paste0("Loading file ", i, " of ", length(files), "..."))
   print(paste0("Sample name: ", filt_dirs[i]))
   temp.data = Read10X_h5(file.path(filedir, files[i]))
-  #metrics = read.csv(file.path('/wynton/group/paredes/Aunoy/human_cellranger', filt_dirs[i], "outs/metrics_summary.csv"))
+  metrics = read.csv(file.path('/wynton/group/paredes/Aunoy/human_cellranger', filt_dirs[i], "outs/metrics_summary.csv"))
   }
   ## Record initial cell x gene estimate
   n_genes = nrow(temp.data)
@@ -109,9 +108,9 @@ for(i in 1:length(files)){
   initial_UMI = ncol(temp)
   
   ## Visualize barcode abundance
-  #print("Visualizing Barcode Abundance...")
-  #threshold <- plot_barcode_abundance(temp, metrics, 
-  #                                    plot_dir = plot_dir)
+  print("Visualizing Barcode Abundance...")
+  threshold <- plot_barcode_abundance(temp, metrics, 
+                                      plot_dir = plot_dir)
   
   ## Check if user likes the threshold
   #threshold <- confirm_barcode_abundance(temp, metrics, threshold, 
