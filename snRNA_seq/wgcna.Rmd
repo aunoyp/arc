@@ -1,0 +1,2272 @@
+---
+title: "marcos_wgcna"
+output: html_notebook
+---
+
+# Details
+Aunoy Poddar
+May 12th, 2024
+This is a notebook to pre-process cellranger data. The chunks iteratively
+will display quality control metrics and ask the user to input the thresholds
+that should be used to generate a final dataset.
+
+Currently, these metrics will include:
+- min genes per cell
+- ribosomal RNA % per cell
+- mitochondrial content per cell
+- number of RNA counts per cell
+
+I sort of like David Wu's approach to do a PCA and just see how the cells arrange
+themselves as well.
+
+
+```{r setup}
+require(knitr)
+#opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+# Import Libraries and declare file paths
+```{r}
+library(Seurat)
+library(tictoc)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(cowplot)
+#library(harmony)
+library(SeuratObject)
+library(SeuratWrappers)
+library(limma)
+library(pracma)
+library(monocle3)
+#library(DoubletFinder)
+#library(DOSE)
+#library(clusterProfiler)
+#source("/wynton/home/paredes/aunoy/src/preprocess_helper.R")
+```
+
+# hdWGCNA
+This analysis followed the tutorial by Sam Morabito at https://smorabit.github.io/hdWGCNA/articles/basic_tutorial.html 
+
+## Loading Libraries
+```{r}
+
+# plotting and data science packages
+library(tidyverse)
+library(cowplot)
+library(patchwork)
+library(viridis)
+library(grDevices)
+library(writexl)
+
+# co-expression network analysis packages:
+library(WGCNA)
+library(hdWGCNA)
+
+# using the cowplot theme for ggplot
+theme_set(theme_cowplot())
+
+# set random seed for reproducibility
+set.seed(12345)
+
+#Variables to keep plots consistent:
+simple = NoAxes() + NoLegend()
+
+mysc = scale_color_viridis(option = "A")
+region.pal = c("#5EBFA2", "#F69663", "#731DD8",  "#FB7C7E")
+
+#Custom functions
+ggsave <- function(..., bg = "white") ggplot2::ggsave(..., bg = bg)
+
+#interneurons = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/merged_annot.rds")
+```
+
+```{r}
+DimPlot(interneurons, group.by = "scvi_clusters2", reduction = "umap.scvi", label = TRUE)
+```
+
+```{r}
+interneurons <- JoinLayers(interneurons)
+interneurons <- FindNeighbors(interneurons, reduction = "integrated.scvi", dims = 1:30)
+interneurons <- FindClusters(interneurons, resolution = 1.5, cluster.name = "scvi_clusters")
+```
+
+
+```{r}
+interneurons$scvi_fate = interneurons$scvi_class
+
+
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("12", "2", "6", "5", "27")] = "MGE_Pallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("33", "18", "31", "16")] = "MGE_Cortical"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("29", "28")] = "MGE_Striatal"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("3", "14", "11")] = "CGE_Pallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("30", "19", "13")] = "CGE_Cortical"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("1")] = "CGE_Subpallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("0")] = "MGE_Subpallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("32", "25", "26", "8", "21", "9")] = "Progenitor"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("4")] = "CGE/LGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("20", "7")] = "LGE D1 MSN"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("15", "23", "35", "34")] = "LGE OB"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("10")] = "LGE D1 MSN PDYN"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("24")] = "Inh IPC"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("17")] = "MGE Subpallial Cholinergic"
+#interneurons$scvi_class[interneurons$scvi_clusters %in% c("0", "9")] = "MGE_Pallial"
+unique(interneurons$scvi_clusters[interneurons$scvi_fate == "MGE"])
+```
+
+
+```{r}
+## from merge datasets not modified
+
+interneurons$scvi_fate = interneurons$scvi_class
+
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("25", "2", "10", "3", "9")] = "MGE_Pallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("20", "18", "31", "29")] = "MGE_Cortical"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("26", "28")] = "MGE_Striatal"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("5", "8", "16")] = "CGE_Pallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("17", "15")] = "CGE_Cortical"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("1", "27")] = "CGE_Subpallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("0")] = "MGE_Subpallial"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("14", "22", "6")] = "Progenitor"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("4", "23")] = "CGE/LGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("21", "7")] = "LGE D1 MSN"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("12")] = "LGE OB"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("11")] = "LGE D1 MSN PDYN"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("24")] = "Inh IPC"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("19")] = "MGE Subpallial Cholinergic"
+#interneurons$scvi_class[interneurons$scvi_clusters %in% c("0", "9")] = "MGE_Pallial"
+unique(interneurons$scvi_clusters[interneurons$scvi_fate == "MGE"])
+```
+
+
+```{r}
+DimPlot(interneurons, reduction = "umap.scvi", group.by = "scvi_fate", label= FALSE)
+```
+
+```{r}
+cds = as.cell_data_set(interneurons[, interneurons$scvi_fate != "LGE D1 MSN PDYN"])
+```
+## Need to add partition, cluster, and umap embedding
+```{r}
+### 
+rec.part <- c(rep(1, length(cds@colData@rownames)))
+names(rec.part) <- cds@colData@rownames
+rec.part <- as.factor(rec.part)
+```
+
+```{r}
+cds@clusters$UMAP$partitions <- rec.part
+```
+
+```{r}
+list_cluster <- interneurons$scvi_clusters#Idents(human_arc[, Idents(human_arc) %in% groups])
+cds@clusters$UMAP$clusters <- list_cluster
+```
+
+```{r}
+#cds@int_colData@listData$reducedDims$UMAP
+cds@int_colData@listData$reducedDims$UMAP = cds@int_colData@listData$reducedDims$UMAP.SCVI
+```
+
+```{r}
+cluster_before_traj <- plot_cells(cds,
+           color_cells_by = 'cluster',
+           label_groups_by_cluster = FALSE,
+           group_label_size = 5) +
+theme(legend.position = "right")
+
+cluster_names <- plot_cells(cds,
+                                 color_cells_by = 'cluster',
+                                 label_groups_by_cluster = FALSE,
+                                 group_label_size = 5) +
+ #scale_color_manual(values = c('red', 'blue', 'green', 'maroon', 'yellow', 'grey', 'cyan')) + 
+  theme(legend.position = "right")
+
+cluster_before_traj | cluster_names
+```
+
+
+```{r}
+new_partitions <-  function(cds, cell_type_2_remove){
+  clusters_to_remove = c()
+  bads = unique(cds@clusters$UMAP$clusters[colData(cds)$scvi_fate == cell_type_2_remove])
+  for(bad in bads) {
+      bad_table = table(colData(cds)$scvi_fate[cds@clusters$UMAP$clusters == bad])
+     percentage = bad_table[cell_type_2_remove] / sum(bad_table)
+     print(percentage)
+     if(percentage > .9){
+       clusters_to_remove = c(clusters_to_remove, bad)
+       print(clusters_to_remove)
+     }
+  }
+  return(clusters_to_remove)
+}
+
+print(new_partitions(cds, "LGE D1 MSN PDYN"))
+```
+
+
+```{r}
+reducedDim(cds)[["LSI"]] = Embeddings(interneurons, "integrated.scvi")
+```
+
+
+```{r}
+cds@clusters$UMAP
+
+cds <- learn_graph(cds, verbose = TRUE)
+
+b <- plot_cells(cds,
+           color_cells_by = 'CGE_Cortical_Lin',
+           label_groups_by_cluster = FALSE,
+           label_branch_points = FALSE,
+           label_roots = FALSE,
+           label_leaves = FALSE,
+           group_label_size = 5)
+b
+ggsave('w_cluster_mge_pseudotime.pdf', b)
+```
+
+
+```{r}
+cds <- order_cells(cds)
+```
+
+```{r}
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           label_roots = F,
+           trajectory_graph_segment_size = 0.7,
+           trajectory_graph_color = "cyan",
+           graph_label_size=1.5) + 
+  scale_color_viridis(name = "Pseudotime")+
+  coord_fixed() +
+  NoAxes() + 
+  theme(legend.position = "bottom")
+```
+```{r}
+CGE_Cortical_Cells = choose_graph_segments(cds, return_list = T) 
+MGE_Cortical_Cells = choose_graph_segments(cds, return_list = T)
+LGE_D1_MSN = choose_graph_segments(cds, return_list = T)
+LGE_D1_MSN_PDYN = choose_graph_segments(cds, return_list = T)
+LGE_OB = choose_graph_segments(cds, return_list = T)
+MGE_Subpallial_Cholinergic = choose_graph_segments(cds, return_list = T)
+MGE_Striatal_Cells = choose_graph_segments(cds, return_list = T)
+```
+
+
+```{r}
+lineages = c("CGE_Cortical_Lin", "MGE_Cortical_Lin", "LGE_D1_MSN_Lin",
+             "LGE_OB_Lin",  "MGE_Striatal_Cells_Lin")
+
+for(lineage in lineages){
+  interneurons[[lineage]] = NA
+}
+
+interneurons$CGE_Cortical_Lin[colnames(interneurons) %in% CGE_Cortical_Cells$cells] = "CGE_Cortical"
+interneurons$MGE_Cortical_Lin[colnames(interneurons) %in% MGE_Cortical_Cells$cells] = "MGE_Cortical"
+interneurons$LGE_D1_MSN_Lin[colnames(interneurons) %in% LGE_D1_MSN$cells] = "LGE_D1_MSN"
+interneurons$LGE_D1_MSN_PDYN_Lin[colnames(interneurons) %in% LGE_D1_MSN_PDYN$cells] = "LGE_D1_MSN_PDYN"
+interneurons$LGE_OB_Lin[colnames(interneurons) %in% LGE_OB$cells] = "LGE_OB"
+interneurons$MGE_Subpallial_Cholinergic_Lin[colnames(interneurons) %in% MGE_Subpallial_Cholinergic$cells] = "MGE_Subpallial_Cholinergic"
+interneurons$MGE_Striatal_Cells_Lin[colnames(interneurons) %in% MGE_Striatal_Cells$cells] = "MGE_Striatal_Cells"
+
+
+interneurons$lineage[colnames(interneurons) %in% CGE_Cortical_Cells$cells] = "CGE_Cortical"
+interneurons$lineage[colnames(interneurons) %in% MGE_Cortical_Cells$cells] = "MGE_Cortical"
+interneurons$lineage[colnames(interneurons) %in% LGE_D1_MSN$cells] = "LGE_D1_MSN"
+interneurons$lineage[colnames(interneurons) %in% LGE_D1_MSN_PDYN$cells] = "LGE_D1_MSN_PDYN"
+interneurons$lineage[colnames(interneurons) %in% LGE_OB$cells] = "LGE_OB"
+interneurons$lineage[colnames(interneurons) %in% MGE_Subpallial_Cholinergic$cells] = "MGE_Subpallial_Cholinergic"
+interneurons$lineage[colnames(interneurons) %in% MGE_Striatal_Cells$cells] = "MGE_Striatal_Cells"
+interneurons$pseudotime = cds@principal_graph_aux@listData$UMAP$pseudotime
+
+
+#inter.exp_step3<- AddMetaData(
+#  object = inter.exp_step2,
+#  metadata = inter.exp_cds@principal_graph_aux@listData$UMAP$pseudotime,
+#  col.name = "pseudotime"
+#)
+#inter.exp_step3@meta.data$pseudotime = as.numeric(gsub("Inf", NA, inter.exp_step2@meta.data$pseudotime))
+saveRDS(interneurons, "/wynton/group/paredes/Aunoy/integrations_w_IPC/reviewer_fig2_wgcna_subtype.rds")
+```
+
+```{r fig.height = 10, fig.width = 12}
+umap.coords = interneurons@reductions$umap.scvi@cell.embeddings
+cells.meta = interneurons@meta.data
+data = cbind(umap.coords, cells.meta)
+
+lins = unique(lineages)
+lins = lins[lins != "error"]
+
+ptsize = 0.2
+p = list()
+
+for(i in 1:length(lins)) {
+  p[[i]] <- ggplot(data, aes(umapscvi_1, umapscvi_2)) + 
+    geom_point(color = "grey90", size = ptsize) +
+    geom_point(data = data %>% filter(!is.na(!!sym(lins[i]))), aes(col = pseudotime), size = ptsize) +
+    scale_color_viridis() + 
+    theme_void() + 
+    coord_fixed() + 
+    labs(title = lins[i]) + 
+    NoLegend()
+}
+
+cowplot::plot_grid(plotlist = p)
+```
+```{r}
+ggplot(data, aes(umapscvi_1, umapscvi_2)) + 
+    geom_point(color = "grey90", size = ptsize) +
+    geom_point(data = data %>% filter(!is.na(!!sym(lins[i]))), aes(col = pseudotime), size = ptsize) +
+    scale_color_viridis() + 
+    theme_void() + 
+    coord_fixed() + 
+    labs(title = lins[i]) + 
+    NoLegend()
+```
+
+```{r}
+mgestr <- cds[,!is.na(colData(cds)$mge_striatal_cell_lin)]
+pr_graph_test_res <- graph_test(mgestr, neighbor_graph="knn", cores=1)
+pr_deg_ids <- row.names(subset(pr_graph_test_res, q_value < 0.05))
+```
+
+```{r}
+colData(cds)$MGE_Striatal_Cells_Lin = interneurons[, interneurons$scvi_fate != "LGE D1 MSN PDYN"]@meta.data[["MGE_Striatal_Cells_Lin"]]
+colData(cds)$CGE_Cortical_Lin = interneurons[, interneurons$scvi_fate != "LGE D1 MSN PDYN"]@meta.data[["CGE_Cortical_Lin"]]
+colData(cds)$MGE_Cortical_Lin = interneurons[, interneurons$scvi_fate != "LGE D1 MSN PDYN"]@meta.data[["MGE_Cortical_Lin"]]
+colData(cds)$LGE_D1_MSN_Lin = interneurons[, interneurons$scvi_fate != "LGE D1 MSN PDYN"]@meta.data[["MGE_Striatal_Cells_Lin"]]
+colData(cds)$LGE_D1_MSN_PDYN_Lin = interneurons[, interneurons$scvi_fate != "LGE D1 MSN PDYN"]@meta.data[["MGE_Striatal_Cells_Lin"]]
+colData(cds)$MGE_Subpallial_Cholinergic_Lin = interneurons[, interneurons$scvi_fate != "LGE D1 MSN PDYN"]@meta.data[["MGE_Striatal_Cells_Lin"]]
+saveRDS(cds, "/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds.rds")
+
+```
+
+
+```{r rename}
+# Project PC dimensions to whole data set
+interneurons <- ProjectDim(interneurons, reduction = "pca")
+
+# Create an expression matrix
+expression_matrix <- interneurons[["RNA"]]$counts
+
+# get gene annotations
+gene_annotation <- data.frame(gene_short_name = rownames(interneurons[["RNA"]]), row.names = rownames(interneurons[["RNA"]]))
+
+# Get cell metadata
+cell_metadata <- interneurons@meta.data
+
+# Seurat-derived CDS
+cds <- new_cell_data_set(expression_matrix,
+                            cell_metadata = cell_metadata,
+                            gene_metadata = gene_annotation)
+# Transfer Seurat embeddings
+
+# Note that these may be calculated on the Integrated object, not the counts
+#   and thus will involve fewer genes
+reducedDim(cds, type = "PCA") <- interneurons@reductions$pca@cell.embeddings 
+cds@reduce_dim_aux$prop_var_expl <- interneurons@reductions$pca@stdev
+#plot_pc_variance_explained(my.cds)
+
+# Transfer Seurat UMAP embeddings
+cds@int_colData@listData$reducedDims$UMAP <- interneurons@reductions$umap.scvi@cell.embeddings
+plot_cells(cds)
+
+# Copy cluster info from Seurat
+cds@clusters$UMAP_so$clusters <-interneurons@meta.data$scvi_clusters
+
+cds <- cluster_cells(cds, reduction_method = "UMAP", resolution = 1e-3)
+
+# Copy cluster info from Seurat
+cds@clusters$UMAP_so$clusters <-interneurons@meta.data$scvi_clusters
+
+# Fix from https://gitmemory.com/cole-trapnell-lab
+rownames(cds@principal_graph_aux$UMAP$dp_mst) <- NULL
+colnames(cds@int_colData@listData$reducedDims$UMAP) <- NULL
+
+plot_cells(cds, color_cells_by = "partition", group_label_size = 3.5)
+plot_cells(cds, color_cells_by = "scvi_fate", show_trajectory_graph = FALSE, group_label_size = 3.5)
+
+cds = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds.rds")
+
+cds <- learn_graph(cds, use_partition = T, verbose = TRUE)
+
+#my.cds <-order_cells(my.cds, reduction_method = "UMAP", root_cells = colnames(cds[, clusters(cds) == 'Replicating_IN']))
+plot_cells(cds, color_cells_by = 'clusters', show_trajectory_graph = TRUE, group_label_size = 3.5)
+```
+
+
+```{r}
+b <- list()
+
+vals = c(5, 10, 20, 30)
+eu_drs = c(0.5, 1, 3, 5)
+count = 1
+combos = length(vals)*length(eu_drs)
+
+for(val in vals) {
+  for(eudr in eu_drs){
+    print(paste0(count, " of ", combos))
+    cds <- learn_graph(cds, use_partition = FALSE,
+                   #close_loop = T, 
+                    learn_graph_control = list(#nn.k = 10,
+                   minimal_branch_len = val,
+                   euclidean_distance_ratio = eudr, 
+                   geodesic_distance_ratio = 1/3), verbose = TRUE)
+    b[[count]] <-plot_cells(cds,
+           color_cells_by = 'cluster',
+           label_groups_by_cluster = FALSE,
+           label_branch_points = FALSE,
+           label_roots = FALSE,
+           label_leaves = FALSE,
+           group_label_size = 5) + ggtitle(paste0("minimal_branch_len: ",
+                                                            val, "; eu_d_ratio: ",
+                                           eudr))
+    count = count + 1
+  }
+}
+
+cowplot::plot_grid(plotlist = b)
+```
+
+    
+```{r}
+cds = cluster_cells(reduction_method = "UMAP", cluster_method = "louvain", cds, k = 50,
+                    verbose = TRUE)
+```
+
+    
+```{r}
+#cds = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds.rds")
+cds = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds_special.rds")
+cds@clusters$UMAP_so$clusters <-interneurons@meta.data$scvi_fate
+
+cds <- learn_graph(cds, use_partition = T, learn_graph_control = list())
+
+names(rec.part) = cds@colData@rownames
+rec.part <- as.factor(rec.part)
+cds@clusters$UMAP$partitions <- rec.part
+
+plot_cells(cds, color_cells_by = 'cluster', show_trajectory_graph = TRUE, group_label_size = 3.5)
+```
+
+
+
+```{r}
+new_partitions <-  function(cds, cell_type_2_remove, threshold = 0.9){
+  clusters_to_remove = c()
+  bads = unique(cds@clusters$UMAP$clusters[colData(cds)$scvi_class == cell_type_2_remove])
+  for(bad in bads) {
+      bad_table = table(colData(cds)$scvi_class[cds@clusters$UMAP$clusters == bad])
+     percentage = bad_table[cell_type_2_remove] / sum(bad_table)
+     if(percentage > threshold){
+       clusters_to_remove = c(clusters_to_remove, bad)
+       print(clusters_to_remove)
+     }
+  }
+  return(clusters_to_remove)
+}
+
+rec.part <- c(rep(1, length(cds@colData@rownames)))
+
+groups_to_remove = c("LGE D1 MSN PDYN")
+partition_num = 2
+for(badgrp in groups_to_remove){
+    bad_clusters = new_partitions(cds, badgrp, threshold = 0.1)
+    rec.part[cds@clusters$UMAP$clusters %in% bad_clusters] = partition_num
+    partition_num = partition_num + 1
+}
+```
+
+    
+```{r}
+#deg_ids <- row.names(subset(deg_cge, q_value == 0))
+cds@reduce_dim_aux[['PCA']][['model']][['svd_v']] <- interneurons@reductions[["pca"]]@feature.loadings.projected
+# Transfer PCs stdevs
+cds@reduce_dim_aux[['PCA']][['model']][['svd_sdev']] <- interneurons@reductions$pca@stdev
+# Transfer PCs cell embeddings (not necessary if UMAP transferred from Seurat used)
+reducedDim(cds, type = "PCA") <-   interneurons@reductions$pca@cell.embeddings
+```
+
+```{r}
+CGE_Cortical_Cells = choose_graph_segments(cds, return_list = T) 
+MGE_Cortical_Cells = choose_graph_segments(cds, return_list = T)
+LGE_D1_MSN = choose_graph_segments(cds, return_list = T)
+LGE_D1_MSN_PDYN = choose_graph_segments(cds, return_list = T)
+LGE_OB = choose_graph_segments(cds, return_list = T)
+MGE_Subpallial_Cholinergic = choose_graph_segments(cds, return_list = T)
+MGE_Striatal_Cells = choose_graph_segments(cds, return_list = T)
+```
+
+```{r}
+colData(cds)$CGE_CX_LIN = NA
+colData(cds)$MGE_CX_LIN = NA
+colData(cds)$LGE_MSN_LIN = NA
+colData(cds)$LGE_MSN2_LIN = NA
+colData(cds)$LGE_OB_LIN = NA
+colData(cds)$MGE_SC_LIN = NA
+colData(cds)$MGE_ST_LIN = NA
+
+
+colData(cds)$CGE_CX_LIN[rownames(colData(cds)) %in% CGE_Cortical_Cells$cells] = "CGE_CX_LIN"
+colData(cds)$MGE_CX_LIN[rownames(colData(cds)) %in% MGE_Cortical_Cells$cells] = "MGE_CX_LIN"
+colData(cds)$LGE_MSN_LIN[rownames(colData(cds)) %in% LGE_D1_MSN$cells] = "LGE_MSN_LIN"
+colData(cds)$LGE_MSN2_LIN[rownames(colData(cds)) %in% LGE_D1_MSN_PDYN$cells] = "LGE_MSN2_LIN"
+colData(cds)$LGE_OB_LIN[rownames(colData(cds)) %in% LGE_OB$cells] = "LGE_OB_LIN"
+colData(cds)$MGE_SC_LIN[rownames(colData(cds)) %in% MGE_Subpallial_Cholinergic$cells] = "MGE_SC_LIN"
+colData(cds)$MGE_ST_LIN[rownames(colData(cds)) %in% MGE_Striatal_Cells$cells] = "MGE_ST_LIN"
+```
+
+
+## GGPLOT stacked for dataset
+x axis = binned pseudotime
+y axis = counts of each categorical variable
+```{r}
+#my.cds_subset = cds[,!is.na(colData(cds)$MGE_CX_LIN)]
+ggplot(colData(cds) %>% as.data.frame() %>%
+         filter(!is.na(MGE_ST_LIN)), aes(pseudotime, fill = dataset)) + 
+    geom_histogram(bins = 10, position = "fill") + 
+    scale_fill_manual(values = c("#FF66AE", "#B88CC2", "#058E8E", "#C1F1AD")) +
+    scale_y_continuous(label = scales::percent,  expand = c(0,0), name = "Percentage of cells") +
+    scale_x_continuous(expand = c(0,0), name = "Pseudotime")  + 
+    #labs(title = "CGE-VIP/RELN Lineage") + 
+    theme(plot.title = element_text(family = "Arial", face = "bold", hjust = 0.5), legend.title = element_blank())
+```
+```{r fig.height = 6, fig.width = 12}
+umap.coords = reducedDim(cds, "UMAP")
+cells.meta = colData(cds)
+data = as.data.frame(cbind(umap.coords, cells.meta))
+
+lins = c("CGE_CX_LIN", "MGE_CX_LIN", "LGE_MSN_LIN", #"LGE_MSN2_LIN",
+"LGE_OB_LIN", "MGE_SC_LIN", "MGE_ST_LIN")
+
+ptsize = 0.2
+p = list()
+
+for(i in 1:length(lins)) {
+  p[[i]] <- ggplot(data, aes(V1, V2)) + 
+    geom_point(color = "grey90", size = ptsize) +
+    geom_point(data = data %>% filter(!is.na(!!sym(lins[i]))), aes(col = pseudotime), size = ptsize) +
+    scale_color_viridis(option = "A") + 
+    theme_void() + 
+    coord_fixed(ratio = 0.5) + 
+    labs(title = lins[i]) + 
+    NoLegend()
+}
+
+cowplot::plot_grid(plotlist = p, ncol = 6)
+```
+
+
+```{r}
+saveRDS(cds, "/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds_special1.rds")
+```
+
+
+
+```{r}
+resolution = 1e-2
+my.cds_subset = cds[,!is.na(colData(cds)$MGE_SC_LIN)]
+pr_deg_ids <- row.names(subset(sc_test_graph_test, q_value < 0.05))
+gene_module_df <- find_gene_modules(my.cds_subset[pr_deg_ids,], resolution=resolution)
+```
+
+```{r}
+cell_group_df <- tibble::tibble(cell=row.names(colData(my.cds_subset)), 
+                                cell_group=colData(my.cds_subset)$scvi_fate)
+agg_mat <- aggregate_gene_expression(my.cds_subset, gene_module_df, cell_group_df)
+row.names(agg_mat) <- stringr::str_c("Module ", row.names(agg_mat))
+pheatmap::pheatmap(agg_mat,
+                   scale="column", clustering_method="ward.D2", main = paste0("Resolution:", resolution))
+```
+
+```{r}
+agg_mat <- aggregate_gene_expression(my.cds_subset, gene_module_df)
+module_dendro <- hclust(dist(agg_mat))
+gene_module_df$module <- factor(gene_module_df$module, 
+                                levels = row.names(agg_mat)[module_dendro$order])
+
+plot_cells(my.cds_subset,
+           genes=gene_module_df,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+```
+
+```{r}
+plot_dataset_by_lin <- function(cds_obj){
+  my_
+}
+```
+
+```{r}
+my_df = as.data.frame(t(agg_mat))
+my_df$pseudotime = colData(my.cds_subset)$pseudotime
+```
+
+```{r}
+my_df$bins = as.numeric(my_df$pseudotime %>% Hmisc::cut2(g=50))
+```
+
+```{r}
+p1 = ggplot(my_df, aes(x = bins, y = mod3, color=dataset)) +
+  geom_point() +
+  geom_smooth() +
+  scale_color_manual(values=c("red", "grey", "grey", "grey"))+
+  xlab('Pseudotime') +
+  ylab('Module_Score') +
+  theme(
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_blank()
+  ) +
+  NoLegend()
+
+p1 + facet_wrap(~dataset, ncol=1)
+```
+```{r}
+cge_genes = c("GBX2", "DSCAM", "ZIC1","LHX8")
+
+
+p <- FeaturePlot(interneurons, reduction = "umap.scvi", features = cge_genes,
+                 combine = FALSE)
+
+for(i in 1:length(p)) {
+  p[[i]] <- p[[i]] + NoLegend() + NoAxes()
+}
+
+cowplot::plot_grid(plotlist = p)
+```
+
+```{r fig.width = 3, fig.height = 6}
+cge_genes = c("LHX8", "ISL1", "ZIC1", "GBX2")
+#cge_genes = mydf_2$id[11:25]
+
+mplot = plot_cells(my.cds_subset,
+           genes=cge_genes,
+           label_cell_groups=FALSE,
+           show_trajectory_graph=FALSE)
+
+mplot + facet_wrap(~feature_label, ncol=1)
+```
+
+```{r}
+genes_to_label = c("ISLR2", "TAC1", "PENK", "FOXP1", "CNTNAP2")
+gene_module_df$labeling = gene_module_df$id
+gene_module_df$labeling[!gene_module_df$labeling %in% genes_to_label] = ""
+
+gene_module_df %>%
+  filter(module == 5 & dim_1 < -12.5) %>%
+  ggplot(aes(x = dim_1, y = dim_2, label = id, color = module)) + 
+  geom_point() + 
+  geom_label_repel(max.overlaps = 100)
+```
+
+
+```{r}
+my.cds_subset <- order_cells(my.cds_subset)
+```
+
+```{r}
+plot_genes_in_pseudotime(my.cds_subset[rowData(my.cds_subset)$gene_short_name %in% c("GRM7", "KAZN"), ],
+                         color_cells_by="scvi_fate",
+                         min_expr=0.5)
+```
+```{r}
+plot_genes_in_pseudotime(my.cds_subset[rowData(my.cds_subset)$gene_short_name %in% c("MEF2C-AS1", "MAF"), ],
+                         color_cells_by="dataset",
+                         min_expr=0.5)
+```
+```{r}
+
+```
+
+
+## Setup
+```{r}
+#inter.exp_step3 = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/merged_annot.rds")
+interneurons@misc$active_wgcna = NULL
+interneurons@misc$inter_fraction_0.05 = NULL
+
+
+interneurons <- SetupForWGCNA(
+  interneurons,
+  gene_select = "fraction", # the gene selection approach
+  fraction = 0.05, # fraction of cells that a gene needs to be expressed in order to be included
+  wgcna_name = "interneuron_expression_modules", # the name of the hdWGCNA experiment
+  group.by = 'dataset')
+
+ncol(interneurons) #20470 cells
+```
+```{r}
+length(GetWGCNAGenes(interneurons))
+
+interneurons$celltype = "interneuron_lineage"
+
+# construct metacells:
+interneurons <- MetacellsByGroups(
+  seurat_obj = interneurons,
+  group.by = c("dataset", "celltype"),
+  k = 25,
+  reduction = 'integrated.scvi',
+  ident.group = 'celltype'
+)
+
+interneurons <- NormalizeMetacells(interneurons)
+
+# set up a gene expression matrix list for each study
+interneurons <- SetMultiExpr(
+  interneurons,
+  group_name = "interneuron_lineage",
+  group.by = "cell_type",
+  multi.group.by = "Study",
+  multi_groups = NULL
+)
+
+# test the soft power threshold
+interneurons <- TestSoftPowersConsensus(
+  interneurons,
+  group.by='cell_type',
+  group_name="MG",
+  setDatExpr=FALSE
+)
+
+plot_list <-  PlotSoftPowers(interneurons)
+
+pdf(paste0(fig_dir, 'test_softpower_ggplot2.pdf'), width=10, height=8)
+wrap_plots(plot_list[[1]], ncol=2) + plot_annotation(
+  title = 'Morabito & Miyoshi',theme = theme(plot.title = element_text(hjust=0.5)))
+
+wrap_plots(plot_list[[2]], ncol=2) + plot_annotation(
+  title = 'Mathys',theme = theme(plot.title = element_text(hjust=0.5)))
+
+wrap_plots(plot_list[[3]], ncol=2) + plot_annotation(
+  title = 'Zhou',theme = theme(plot.title = element_text(hjust=0.5)))
+dev.off()
+
+
+interneurons <- ConstructNetwork(
+  interneurons,
+  soft_power=c(6,6,8),
+  consensus=TRUE,
+  setDatExpr=FALSE,
+  detectCutHeight=0.999999
+)
+
+# plot the dendrogram
+pdf(paste0(fig_dir, "MG_dendro.pdf"),height=3, width=6)
+PlotDendrogram(interneurons, main='MG Consensus Dendrogram')
+dev.off()
+
+interneurons <- ModuleEigengenes(
+  interneurons,
+  group.by.vars="Study", # snRNAseq batch
+  verbose=FALSE
+)
+
+# compute module connectivity:
+interneurons <- ModuleConnectivity(interneurons)
+
+# run RenameModules
+interneurons <- ResetModuleNames(
+  interneurons,
+  new_name = "MG-M"
+)
+print(names(GetModules(interneurons)))
+```
+
+```{r}
+plot_list[[4]]
+```
+
+
+
+```{r}
+DimPlot(interneurons, group.by = "scvi_clusters", reduction = "umap.scvi",
+        label = TRUE) + NoLegend()
+```
+```{r}
+interneurons$scvi_fate = interneurons$scvi_class
+
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("25", "2", "10", "3", "9")] = "Imm-MGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("20", "18", "31", "29")] = "cortical MGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("26", "28")] = "striatal MGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("5", "8", "16")] = "Imm-CGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("17", "15")] = "cortical CGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("1", "27")] = "CGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("0")] = "MGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("14", "22", "6", "13")] = "Progenitor"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("4", "23")] = "Imm-CGE/LGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("21", "7")] = "LGE D1 MSN"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("12", "32", "33")] = "OB-LGE"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("11")] = "LGE D1 MSN PDYN"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("24")] = "In-IPC"
+interneurons$scvi_fate[interneurons$scvi_clusters %in% c("19")] = "cholinergic MGE"
+```
+
+
+```{r}
+unique(interneurons$scvi_clusters[interneurons$scvi_fate == "CGE/LGE"])
+```
+
+```{r}
+color_mapping <- data.table::data.table(
+  color = c("#165016", "#2ca02c", "#98df8a", # CGE Colors
+    "#17becf", "#9467bd", # CGE/LGE and inh ipc
+    "#aec7e8", "cornflowerblue", "#1f77b4", #LGE
+    "#8c564b", "#d62728", "#ff9896", "#ff7f0e",
+    "#e377c2", "#7f7f7f")
+)
+interneurons$scvi_fate = factor(interneurons$scvi_fate,
+        levels = c("cortical CGE", "Imm-CGE", "CGE", 
+                   "Imm-CGE/LGE", "In-IPC",
+                   "LGE D1 MSN", "LGE D1 MSN PDYN", "OB-LGE",
+                   "cholinergic MGE", "cortical MGE", "Imm-MGE", "striatal MGE",
+                   "MGE", "Progenitor"))
+DimPlot(interneurons, reduction = "umap.scvi", pt.size = 0.1, alpha = 0.7,
+        cols = color_mapping$color, group.by = "scvi_fate", raster = FALSE) +
+  NoLegend() + NoAxes() + 
+    coord_fixed(ratio = 0.8) 
+```
+
+```{r fig.height = 8, fig.width = 3}
+Idents(interneurons) = "class"
+
+
+VlnPlot(interneurons[, interneurons$dataset == "arc"], features = c("TOP2A", "CENPF", "MKI67",
+                                   "GAD1", "DCX", "DLX1", 
+                                   "DLX2", "DLX5", "DLX6-AS1",
+                                   "ARX", "PROX1", "NR2F2-AS1",
+                                   "MEIS2", "FOXP2", "TSHZ1",
+                                   "ERBB4", "PDZRN3", "TOX3",
+                                   "KAZN", "MAF", "MAFB", "MEF2C"),
+        idents = c("Inh IPC"), stack = TRUE, flip = TRUE) + NoLegend()
+```
+
+### 
+cge = 6 6 6 5
+mge = 5 6 6 6 
+
+```{r}
+interneurons = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/reviewer_fig2_wgcna.rds")
+interneurons = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/mgewgcna.rds")
+interneurons = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/cgewgcna.rds")
+```
+
+```{r}
+saveRDS(interneurons, "/wynton/group/paredes/Aunoy/integrations_w_IPC/reviewer_fig2_wgcna.rds")
+```
+
+
+```{r}
+interneurons$dataset
+```
+
+
+```{r}
+library("ggbeeswarm")
+#interneurons$grouped_age = interneurons$age
+#interneurons$age = as.character(interneurons$grouped_age)
+interneurons$age[grepl("GW09", interneurons$orig.ident)] = "9"
+interneurons$age[grepl("GW12", interneurons$orig.ident)] = "12"
+interneurons$age[grepl("GW13", interneurons$orig.ident)] = "13"
+interneurons$age[grepl("GW16", interneurons$orig.ident)] = "16"
+interneurons$age[grepl("GW18", interneurons$orig.ident)] = "18"
+interneurons$age[interneurons$orig.ident %in% c("9C", "9G")] = "17"
+interneurons$age[interneurons$orig.ident %in% c("24C", "24G")] = "18"
+interneurons$age[interneurons$orig.ident %in% c("26C", "26G")] = "19"
+interneurons$age[interneurons$orig.ident %in% c("11C", "11G")] = "20"
+interneurons$age[interneurons$orig.ident %in% c("56C", "56G")] = "21"
+interneurons$age[interneurons$orig.ident %in% c("30C", "30G")] = "22"
+interneurons$age[interneurons$orig.ident %in% c("63C", "63G")] = "23"
+interneurons$age[interneurons$orig.ident %in% c("34G", "34C")] = "21"
+interneurons$age[interneurons$orig.ident %in% c("23C", "23G")] = "24"
+interneurons$age[interneurons$orig.ident %in% c("62C", "62G")] = "25"
+interneurons$age[interneurons$orig.ident %in% c("64C", "64G")] = "26"
+interneurons$age[interneurons$orig.ident %in% c("3C", "3G")] = "26"
+interneurons$age[interneurons$orig.ident %in% c("60C", "60G")] = "33"
+interneurons$age[interneurons$orig.ident %in% c("10C", "10G")] = "33"
+interneurons$age[interneurons$orig.ident %in% c("6C", "6G")] = "38"
+interneurons$age[grepl("023_Arc", interneurons$orig.ident)] = "30"
+interneurons$age[grepl("003_", interneurons$orig.ident)] = "40"
+interneurons$age[grepl("2014", interneurons$orig.ident)] = "40"
+interneurons$age = as.numeric(interneurons$age)
+
+interneurons$normed_age = (interneurons$age - min(interneurons$age)) / (max(interneurons$age) - min(interneurons$age))
+```
+
+```{r fig.height = 8, fig.width = 5}
+age_df = interneurons@meta.data[, c("age", "scvi_fate")]
+
+ap = list()
+i = 1
+
+for(fate in levels(interneurons$scvi_fate)){
+  ap[[i]] = age_df %>%
+  filter(scvi_fate == fate) %>%
+  ggplot(aes(x = age, y = scvi_fate, color = age)) +
+  #geom_violin() +
+  geom_beeswarm(cex = 0.5) +#
+  #geom_jitter(width = 0.75, height = 0.4, alpha = 0.1) + 
+  NoLegend() + theme_classic() + 
+  #paletteer::scale_color_paletteer_c("pals::ocean.matter")+
+  coord_fixed(ratio = 0.8) + 
+  #theme(text = element_text(size = 8),
+  #      axis.text.x = element_text(angle = 90, hjust = 1)) +xlab("") + ylab("")
+  i = i + 1
+}
+
+cowplot::plot_grid(plotlist = ap[], ncol = 2)
+
+```
+
+```{r fig.height = 1.3, fig.width = 1.79}
+age_df = interneurons@meta.data[, c("scvi_fate", "age")]
+
+age_df %>%
+  filter(scvi_fate %in% c("Imm-CGE", "Imm-MGE", "Imm-CGE/LGE", "OB-LGE", "In-IPC")) %>%
+  ggplot(aes(x = factor(scvi_fate, level = rev(c("Imm-CGE", "Imm-MGE", "Imm-CGE/LGE", "OB-LGE", "In-IPC"))), fill = age)) +
+  geom_bar(position="stack") + xlab("") + paletteer::scale_fill_paletteer_d("NineteenEightyR::miami2") +
+  theme_classic()  + NoLegend() + RotatedAxis()
+```
+
+
+```{r fig.height = 1.3, fig.width = 2.1}
+age_df = interneurons@meta.data[, c("dataset", "scvi_fate")]
+
+age_df %>%
+  filter(scvi_fate %in% c("Imm-CGE", "Imm-MGE", "Imm-CGE/LGE", "OB-LGE", "In-IPC")) %>%
+  ggplot(aes(x = factor(scvi_fate, level = rev(c("Imm-CGE", "Imm-MGE", "Imm-CGE/LGE", "OB-LGE", "In-IPC"))), fill = dataset)) +
+  geom_bar(position="fill") + xlab("") +
+  theme_classic() + coord_flip() + scale_fill_manual(values = c("#FF66AE", "#B88CC2", "#058E8E", "#C1F1AD")) + NoLegend() + RotatedAxis()
+```
+
+```{r}
+umap.coords = interneurons@reductions$umap.scvi@cell.embeddings
+meta_cols = colnames(interneurons@meta.data)
+cells.meta = interneurons@meta.data[, meta_cols[grepl("MGE", meta_cols)]]
+data = as.data.frame(cbind(umap.coords, cells.meta))
+myplots = list()
+i = 1
+pt.size = 0.01
+for(column in sort(colnames(cells.meta))){
+  myplots[[i]] <- ggplot(data, aes(umapscvi_1, umapscvi_2)) + 
+  geom_point(color = "grey90", size = pt.size) +
+  geom_point(data = data  %>% filter(!is.na(!!sym(column))) %>% arrange(!!sym(column)), 
+             aes(col = !!sym(column)), size = pt.size, alpha = 0.8) +
+  #scale_colour_gradient(low = "grey90", high = "#2ca02c") +#d62728
+    scale_colour_gradient(low = "grey90", high = "#d62728") + 
+  theme_void() + 
+  coord_fixed(ratio = 0.8) + 
+  labs(title = column) + #+ 
+  NoLegend()
+    i = i + 1
+}
+
+cowplot::plot_grid(plotlist = myplots, ncol = 2, scale = 0.7)
+```
+
+
+
+```{r}
+
+```
+
+
+```{r}
+age_df %>%
+  filter(scvi_fate == "CGE") %>%
+  ggplot(aes(x = age, y = scvi_fate, color = age)) +
+  geom_violin() + geom_beeswarm() +#
+  #geom_jitter(width = 0.75, height = 0.4, alpha = 0.1) + 
+  NoLegend() + theme_classic() + 
+  paletteer::scale_color_paletteer_c("pals::ocean.matter")+
+  coord_fixed(ratio = 0.5)
+
+```
+
+
+```{r}
+PlotDendrogram(interneurons, main='Inh Consensus Dendrogram')
+```
+
+```{r}
+print(names(GetModules(interneurons)))
+```
+
+
+```{r}
+library(MetBrewer)
+
+modules <- GetModules(interneurons)
+mods <- levels(modules$module)
+mod_colors <- dplyr::select(modules, c(module, color)) %>%
+  distinct %>% arrange(module) %>% .$color
+n_colors <- length(mod_colors) -1
+
+new_colors <- paste0(met.brewer("Renoir", n=n_colors, type='discrete'))
+interneurons <- ResetModuleColors(interneurons, new_colors)
+```
+
+
+```{r}
+ixs = plot_df %>%
+  group_by(variable) %>%
+  summarise(max = max(value, na.rm=TRUE)) %>%
+  arrange(desc(max))
+
+bin_order = plot_df[match(ixs$max, plot_df$value), ] %>%
+  arrange(bin)
+
+bin_order$variable
+```
+
+
+```{r}
+# compute the average ME score in each bin:
+
+interneurons <- BinPseudotime(interneurons, n_bins=c(5,50,100))
+
+
+features <- mods
+avg_scores <- interneurons@meta.data %>%
+  group_by(pseudotime_bins_50) %>%
+  select(all_of(features)) %>%
+  summarise_all(mean)
+
+colnames(avg_scores)[1] <- 'bin'
+
+plot_df <- reshape2::melt(avg_scores)
+
+mods
+
+plot_df$variable = as.character(plot_df$variable)
+plot_df$variable = factor(plot_df$variable, levels = as.character(bin_order$variable))
+
+color_ixs = match(levels(plot_df$variable)[levels(plot_df$variable) != "grey"], mods[mods != "grey"], )
+
+p1 <- plot_df %>%
+  filter(variable != "grey") %>%
+  ggplot(aes(x = as.numeric(bin), y = value, color= variable)) +
+  geom_point() +
+  geom_smooth() +
+  scale_color_manual(values=new_colors[color_ixs])+
+  xlab('Pseudotime') +
+  ylab('hME') +
+  theme(
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_blank()
+  ) +
+  NoLegend()
+p1 + facet_wrap(~variable, ncol=4, scales='free')
+```
+
+
+```{r}
+
+plot_list <- ModuleFeaturePlot(interneurons, order=TRUE, raster=TRUE, raster_dpi=400, alpha=0.7,
+                               reduction = "umap.scvi")
+#pdf("figures/MG_featureplot_hMEs.pdf",height=4, width=16)
+wrap_plots(plot_list, ncol=4)
+#dev.off()
+
+mes = GetMEs(interneurons)
+
+interneurons@meta.data = cbind(interneurons@meta.data, mes)
+plot_list <- ModuleFeaturePlot(interneurons, order=TRUE, raster=TRUE, reduction = "umap.scvi", 
+                               raster_dpi=400, alpha=0.7, features='MEs')
+#pdf("figures/MG_featureplot_MEs.pdf",height=4, width=16)
+wrap_plots(plot_list, ncol=4)
+#dev.off()
+```
+
+
+```{r}
+mods = GetModules(interneurons)
+mods <- levels(mods$module)
+
+arc_data = interneurons@meta.data[, c("dataset", mods)]
+
+
+#rev_bov = as.character(bin_order$variable)
+#rev_bov = rev_bov[rev_bov != "grey"]
+
+#color_ixs = match(rev_bov, mods[mods != "grey"], )
+
+
+arc_data %>%
+  pivot_longer(!dataset, names_to = "module", values_to = "score") %>%
+  filter(dataset == "arc") %>%
+  filter(module != "grey") %>%
+  ggplot(aes(x = factor(module, levels = rev_bov), y = score, fill = factor(module,
+                                                                            levels = rev_bov),
+             color = factor(module, levels = rev_bov))) +
+  scale_fill_manual(values=new_colors[color_ixs])+
+  scale_color_manual(values=new_colors[color_ixs])+
+  geom_boxplot(notch = TRUE,color = "black", outlier.alpha = 0.3, outlier.shape = NA) + #limy(0, 18) + 
+  #geom_violin() + 
+  geom_jitter(size = 0.1, alpha = 0.3, width = 0.1) + 
+  theme_classic() + NoLegend() + RotatedAxis()
+```
+
+```{r}
+mods = GetModules(cge)
+mods <- levels(mods$module)
+
+arc_data = cge@meta.data[, c("dataset", mods)]
+
+
+arc_data %>%
+  pivot_longer(!dataset, names_to = "module", values_to = "score") %>%
+  filter(dataset == "arc") %>%
+  filter(module != "grey") %>%
+  ggplot(aes(x = module, y = score, fill = module,
+             color = module)) +
+  #scale_fill_manual(values=new_colors[color_ixs])+
+  #scale_color_manual(values=new_colors[color_ixs])+
+  geom_boxplot(notch = TRUE,color = "black", outlier.alpha = 0.3, outlier.shape = NA) + #limy(0, 18) + 
+  #geom_violin() + 
+  geom_jitter(size = 0.1, alpha = 0.3, width = 0.1) + 
+  theme_classic() + NoLegend() + RotatedAxis()
+```
+```{r}
+cge_migs = cge_modules %>%
+  filter(gene_name %in% nmig_genes) %>%
+  filter(module == "CGE4")
+mge_migs = mge_modules %>%
+  filter(gene_name %in% nmig_genes) %>%
+  filter(module == "MGE1")
+
+cge_mge = intersect(cge_migs$gene_name, mge_migs$gene_name)
+mge_unique = setdiff(mge_migs$gene_name, cge_migs$gene_name)
+cge_unique = setdiff(cge_migs$gene_name, mge_migs$gene_name)
+```
+
+CGE1 / MGE 1:
+"SEMA6C"  "ARHGEF2" "NAV1"    "PLXNA2"  "CTNNA2"  "GSK3B"   "NIPBL"   "MAPK8"   "PSEN1"   "PLXNB2"  "ARX"     "GPR173" 
+
+MGE unique
+ [1] "ACAP3"    "ASTN1"    "PLXNB1"   "ZSWIM6"   "PHACTR1"  "FYN"      "PLXNA4"   "LRP12"    "PTK2"     "LHX6"     "ZMIZ1"    "MARK2"   
+[13] "ULK1"     "DCLK1"    "SOX1"     "PAFAH1B1" "STAT3"    "CDKL5"    "PLXNA3"  
+
+CGE unique
+"MYH10" "DCX"  
+
+CGE/MGE 2
+"DAB1"   "CAMK2A" "CAMK2B" "NTRK2"  "NRG3"   "MDGA2" 
+
+MGE unique:
+"SLIT2" "PRKG1" "UNC5C" "RELN" 
+
+CGE unique:
+"NTNG1"  "SEMA4A" "CCK"    "ROBO1"  "APBB2"  "MEF2C"  "PLXNA4" "SEMA4D" "ASTN2"  "NSMF"   "FAT3"   "SEMA6D" "NTRK3"  "ITGA3"  "SEMA6B"
+ "VLDLR"
+
+3:
+MGE unique: "CXCR4"  "TUBA1A" "NKX2-1"
+CGE unique: "NDN"
+
+
+4:
+"ERBB4" "UNC5D"
+
+mge unique: "SEMA6A" "MDGA1" 
+cge unique: "ASTN1"   "DISC1"   "CHL1"    "SPOCK1"  "PHACTR1" "AUTS2"   "SEMA3C"  "SEMA3A"  "KIRREL3" "DCLK1"   "FLRT2"   "MAPT"    "FGF13"  
+
+
+
+```{r}
+library(igraph)
+
+# individual module networks
+ModuleNetworkPlot(
+  interneurons,
+  mods = "all",
+  #label_center=TRUE,
+  outdir = paste0("~/src/", 'CGEIN_hubNetworks/')
+)
+```
+
+```{r}
+interneurons <- RunModuleUMAP(
+  interneurons,
+  n_hubs = 10,
+  n_neighbors=15,
+  min_dist=0.3,
+  spread=5
+)
+
+# get the hub gene UMAP table from the seurat object
+umap_df <- GetModuleUMAP(
+  interneurons
+)
+
+#label_genes <- c('NKX2-1', 'LHX6', 'DLX2', 'DLX5', 'ARX', 'DLX6-AS1',
+#                 'CXCR4', 'ACKR3', 'MEF2C', 'TOP2A', 'MAFB', 'NRXN3')
+label_genes <- c('NR2F2-AS1', 'PROX1', 'DLX2', 'DLX5', 'ARX', 'DLX6-AS1',
+                 'CXCR4', 'SP8', 'CNR1', 'SCGN')
+
+library(reshape2)
+#library(igraph)
+pdf(paste0("~/src", 'CGEIN_hubgene_umap_igraph.pdf'), width=15, height=15)
+ModuleUMAPPlot(
+  interneurons,
+  edge.alpha=0.5,
+  sample_edges=TRUE,
+  keep_grey_edges=FALSE,
+  edge_prop=0.075, # taking the top 20% strongest edges in each module
+  label_genes = label_genes,
+  label_hubs=10 # how many hub genes to plot per module?
+)
+dev.off()
+```
+
+```{r}
+p <- PlotKMEs(interneurons, ncol=3)
+
+p
+```
+
+
+
+
+```{r}
+mge_modules <- GetModules(interneurons) %>% subset(module !=  "grey")
+cge_modules <- GetModules(cge) %>% subset(module !=  "grey")
+
+mge_genes = mge_modules %>% filter(module == "MGE1")
+cge_genes = cge_modules %>% filter(module == "CGE2")
+```
+
+```{r}
+cge_genes$gene_name
+```
+
+```{r}
+mge_tfs %>% arrange(desc(kME_MGE1)) %>% filter(! gene_name %in% cge_modules$ge)
+```
+
+
+
+```{r}
+cge_tfs = cge_modules %>%
+  filter(gene_name %in% tfs) %>%
+  filter(module == "CGE4")
+mge_tfs = mge_modules %>%
+  filter(gene_name %in% tfs) %>%
+  filter(module == "MGE4")
+
+mge_unique = setdiff(mge_tfs$gene_name, cge_tfs$gene_name)
+cge_unique = setdiff(cge_tfs$gene_name, mge_tfs$gene_name)
+```
+```{r}
+mge_tfs %>% arrange(desc(kME_MGE4)) %>% filter(gene_name %in% mge_unique)
+```
+```{r}
+cge_tfs %>% arrange(desc(kME_CGE3))
+```
+
+```{r}
+cge_rcp = cge_modules %>%
+  filter(gene_name %in% receptor_genes$Gene) %>%
+  filter(module == "CGE2")
+mge_rcp = mge_modules %>%
+  filter(gene_name %in% receptor_genes$Gene) %>%
+  filter(module == "MGE2")
+
+mge_unique_rcp = setdiff(mge_rcp$gene_name, cge_rcp$gene_name)
+cge_unique_rcp = setdiff(cge_rcp$gene_name, mge_rcp$gene_name)
+```
+
+```{r}
+mge_rcp %>% arrange(desc(kME_MGE2)) %>% filter(gene_name %in% mge_unique_rcp)
+```
+```{r}
+cge_rcp %>% arrange(desc(kME_CGE2)) %>% filter(gene_name %in% cge_unique_rcp)
+```
+
+```{r}
+shared = intersect(mge_genes$gene_name, cge_genes$gene_name)
+not_shared = 
+```
+
+```{r}
+cge_mods = unique(cge_modules$module)
+mge_mods = unique(mge_modules$module)
+
+i = 1
+overlaps = c()
+cges = c()
+mges = c()
+
+for(cge_moddo in cge_mods){
+  for(mge_moddo in mge_mods){
+    mge_genes = mge_modules %>% filter(module == mge_moddo)
+    cge_genes = cge_modules %>% filter(module == cge_moddo)
+    overlaps = c(overlaps, length(intersect(mge_genes$gene_name, cge_genes$gene_name)))
+    cges = c(cges, cge_moddo)
+    mges = c(mges, mge_moddo)
+  }
+}
+
+corr_df = as.data.frame(cbind(overlaps, cges, mges))
+colnames(corr_df) = c("intersections", "cge_module", "mge_module")
+```
+
+```{r fig.height = 1.8, fig.width = 4}
+corr_df %>%
+  ggplot(aes(x = cges, y = mges, fill = as.numeric(intersections))) + 
+  geom_tile(color = "white") + viridis::scale_fill_viridis() + theme_classic() + RotatedAxis()# +
+```
+```{r}
+mge_genes = mge_modules %>% filter(module == "MGE2")
+cge_genes = cge_modules %>% filter(module == "CGE2")
+module_two = c(setdiff(mge_genes$gene_name, cge_genes$gene_name),
+               setdiff(cge_genes$gene_name, mge_genes$gene_name))
+```
+
+```{r}
+print(module_two[module_two %in% cge_genes$gene_name])
+#print(module_two[module_two %in% mge_genes$gene_name])
+```
+
+
+
+```{r}
+library(enrichR)
+#devtools::install_github("wjawaid/enrichR")
+
+dbs <-c('GO_Biological_Process_2021','GO_Cellular_Compponent_2021','GO_Molecular_Function_2021','LINCS_L1000_Chem_Pert_up','LINCS_L1000_Chem_Pert_down', 'WikiPathway_2021_Human', 'KEGG_2021_Human')
+
+dbs <-c('GO_Biological_Process_2021','GO_Cellular_Compponent_2021','GO_Molecular_Function_2021', 'WikiPathway_2021_Human', 'KEGG_2021_Human')
+
+# compute GO terms:
+interneurons <- RunEnrichr(interneurons, dbs=dbs)
+
+enrichrtable = GetEnrichrTable(interneurons)
+
+# make GO term plots:
+EnrichrBarPlot(
+  interneurons,
+  outdir = "~/src/IN_enrichr_plots",
+  n_terms = 25, plot_size = c(4,16),
+  logscale=TRUE
+)
+
+# enrichr dotplot
+p <- EnrichrDotPlotCustom(
+  interneurons, mods = mods[2:length(mods)],
+  database = dbs[1], n_terms=5,
+  break_ties=TRUE
+)
+```
+```{r fig.width = 10, fig.height = 8}
+p
+```
+
+
+```{r}
+modules
+```
+
+
+
+```{r}
+FeaturePlot(interneurons, features = "ERBB4", reduction = "umap.scv i")
+```
+
+
+```{r}
+EnrichrDotPlotCustom <- function(
+  seurat_obj, database, mods="all",
+  n_terms = 3, break_ties=TRUE,
+   logscale=TRUE, wgcna_name=NULL, ...
+){
+
+  # get data from active assay if wgcna_name is not given
+  if(is.null(wgcna_name)){wgcna_name <- seurat_obj@misc$active_wgcna}
+
+  # get modules:
+  modules <- GetModules(seurat_obj, wgcna_name)
+
+  # using all modules?
+  #if(mods == 'all'){
+  #  mods <- levels(modules$module)
+  #  mods <- mods[mods != 'grey']
+  #}
+
+  # get Enrichr table
+  enrichr_df <- GetEnrichrTable(seurat_obj, wgcna_name)
+
+  # add color to enrich_table
+  mod_colors <- dplyr::select(modules, c(module, color)) %>% dplyr::distinct()
+  enrichr_df$color <- mod_colors[match(enrichr_df$module, mod_colors$module), 'color']
+
+  # helper function to wrap text
+  wrapText <- function(x, len) {
+      sapply(x, function(y) paste(strwrap(y, len), collapse = "\n"), USE.NAMES = FALSE)
+  }
+
+  # get data to plot
+  plot_df <- enrichr_df %>%
+    subset(db == database & module %in% mods) %>%
+    group_by(module) %>%
+    top_n(n_terms, wt=Combined.Score)
+
+  # sometimes top_n returns more than the desired number if there are ties. so here
+  # we just randomly sample to break ties:
+  if(break_ties){
+    plot_df <- do.call(rbind, lapply(plot_df %>% group_by(module) %>% group_split, function(x){x[sample(n_terms),]}))
+  }
+
+  plot_df$Term <- wrapText(plot_df$Term, 45)
+
+  # set modules factor and re-order:
+  plot_df$module <- factor(
+    as.character(plot_df$module),
+    levels=levels(modules$module)
+  )
+  plot_df <- arrange(plot_df, module)
+
+  # set Terms factor
+  plot_df$Term <- factor(
+    as.character(plot_df$Term),
+    levels = unique(as.character(plot_df$Term))
+  )
+
+  # logscale?
+  if(logscale){
+    plot_df$Combined.Score <- log(plot_df$Combined.Score)
+    lab <- 'Enrichment\nlog(combined score)'
+    x <- 0.2
+  } else{lab <- 'Enrichment\n(combined score)'; x <- 5}
+
+
+  p <- plot_df  %>%
+    ggplot(aes(x=module, y=Term)) +
+    geom_point(aes(size=Combined.Score), color=plot_df$color) +
+    RotatedAxis() +
+    ylab('') + xlab('') + labs(size=lab) +
+    scale_y_discrete(limits=rev) +
+    ggtitle(database) +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.line.x = element_blank(),
+      axis.line.y = element_blank(),
+      panel.border = element_rect(colour = "black", fill=NA, size=1)
+    )
+
+  p
+}
+```
+
+
+```{r}
+plot_list <- OverlapBarPlot(overlap_df)
+
+# stitch plots with patchwork
+wrap_plots(plot_list, ncol=3)
+```
+
+```{r}
+p <- EnrichrDotPlotCustom(
+  interneurons, mods = c("Inh3", "Inh9", "Inh11", "Inh2"),
+  database = dbs[1], n_terms=3,
+  break_ties=TRUE
+)
+```
+
+```{r fig.height = 9, fig.width = 7}
+p #+ scale_x_discrete(c('Inh1', 'Inh12', 'Inh7', 'Inh4'))
+```
+```{r}
+enrichrtable
+```
+```{r}
+modules <- GetModules(seurat_mg)
+mods <- levels(modules$module)
+mods <- mods[mods!='grey']
+module_colors <- modules %>% dplyr::select(c(module, color)) %>% distinct()
+rownames(module_colors) <- module_colors$module
+mod_colors <- module_colors[mods, 'color']
+names(mod_colors) <- mods
+
+# helper function to wrap text
+wrapText <- function(x, len) {
+    sapply(x, function(y) paste(strwrap(y, len), collapse = "\n"), USE.NAMES = FALSE)
+}
+
+selected_terms <- read.csv('data/AD_MG_enrichr_selected.csv')
+
+# remove GO Term ID
+selected_terms$Term <- str_replace(selected_terms$Term, " \\s*\\([^\\)]+\\)", "")
+
+selected_terms <- selected_terms %>%
+  group_by(module) %>%
+  arrange(Combined.Score)
+
+selected_terms$wrap <- wrapText(selected_terms$Term, 35)
+
+idx = which(enrichrtable$Term %in% final_terms$Term)
+selected_terms$Combined.Score = enrichrtable[]
+
+p <- selected_terms  %>%
+  ggplot(aes(x=log(Combined.Score), y=reorder(wrap, Combined.Score), fill=module))+
+  geom_bar(stat='identity', position='identity', color='white') +
+  geom_text(aes(label=wrap), x=.1, color='black', size=3.5, hjust='left') +
+  #scale_fill_manual(values=mod_colors) +
+  ylab('Term') + xlab('log(Enrichment)') +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme(
+    panel.grid.major=element_blank(),
+    panel.grid.minor=element_blank(),
+    legend.title = element_blank(),
+    axis.ticks.y=element_blank(),
+    axis.text.y=element_blank(),
+    axis.line.y=element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+pdf(paste0(fig_dir, 'MG_selected_GO_terms.pdf'), width= 6, height=7 , useDingbats=FALSE)
+p + facet_wrap(~module, ncol=2, scales='free') + NoLegend()
+dev.off()
+```
+
+
+
+FINAL DOTPLOTS
+
+
+```{r}
+final_terms = readxl::read_excel("~/my_genes.xlsx", col_names = FALSE)
+
+# enrichr dotplot
+p <- EnrichrDotPlot(
+  en,
+  database = final_terms$...1, n_terms=3,
+  break_ties=TRUE
+)
+```
+```{r}
+# subset selected terms
+
+final_terms$...2 = paste0("Inh", final_terms$...2)
+
+colnames(final_terms) = c("Term", "modules")
+final_terms$group = factor(final_terms$modules, levels = levels(selected_terms$group))
+
+term_order = final_terms %>% arrange(group)
+
+terms2 = strsplit(term_order$Term, split = "\\(GO:")
+term_order$Term<- unlist(map(terms2, 1))
+
+term_order$Term
+
+
+selected_terms = final_terms
+# remove GO Term ID
+terms = strsplit(selected_terms$Term, split = "\\(GO:")
+selected_terms$Term<- unlist(map(terms, 1))
+selected_terms$go_id <- unlist(map(terms, 2))
+
+selected_terms$score = -1
+selected_terms$logp = -1
+
+for(i in 1:nrow(selected_terms)){
+  goid = selected_terms$go_id[i]
+  ix = which(grepl(goid, enrichrtable$Term) & enrichrtable$module == selected_terms$modules[i])
+  selected_terms$score[i] = enrichrtable$Combined.Score[ix]
+  selected_terms$logp[i] <- enrichrtable$P.value[ix]
+}
+
+selected_terms <- selected_terms %>%
+  arrange(group)
+
+
+selected_terms$wrap <- wrapText(selected_terms$Term, 35)
+
+selected_terms$Term <- factor(selected_terms$Term,
+  levels = term_order$Term)
+
+selected_terms$group = factor(selected_terms$group, 
+                              levels = c("Inh1", "Inh12", "Inh7", "Inh4",
+                                         "Inh8", "Inh5", "Inh6", "Inh9",
+                                         "Inh10", "Inh3", "Inh2", "Inh11"))
+
+# GO Term dot plot
+
+p <- selected_terms %>%
+  ggplot(aes(x = group, y = Term, color =logp, size=log(score))) +
+  geom_point() +
+  scale_color_stepsn(colors=rev(magma(256))) +
+  RotatedAxis() + xlab('') + ylab('') +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_rect(size=1, color='black', fill=NA),
+    axis.line.x = element_blank(),
+    axis.line.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.margin = margin(0,0,0,0),
+    panel.grid = element_line(size=0.25, color='lightgrey')
+  )
+
+mod_ixs = match(levels(selected_terms$group), mods[mods!="grey"])
+
+color_df <- data.frame(
+  colour = new_colors[mod_ixs],
+  group = mods[mods!="grey"][mod_ixs]
+)
+
+# make the colorbar as its own heatmap
+color_df$var <- 1
+cp <- color_df$colour; names(cp) <- color_df$group
+colorbar <- color_df %>%
+  ggplot(aes(x=factor(group, levels = levels(selected_terms$group)), y=var, fill=group)) +
+  geom_tile() +
+  scale_fill_manual(values=cp) +
+  coord_equal() +
+  NoLegend() + RotatedAxis() +
+  theme(
+    plot.title=element_blank(),
+    axis.line=element_blank(),
+    axis.ticks.y =element_blank(),
+    axis.text.y = element_blank(),
+    axis.title = element_blank(),
+    plot.margin=margin(0,0,0,0),
+  )
+```
+
+
+```{r fig.height = 6, fig.width = 10}
+p / colorbar
+```
+
+
+```{r}
+interneurons <- MetacellsByGroups(
+  interneurons = interneurons,
+  group.by = c("orig.ident"), # specify the columns in interneurons@meta.data to group by
+  reduction = 'integrated.scvi', # select the dimensionality reduction to perform KNN on
+  k = 25, # nearest-neighbors parameter
+  max_shared = 10, # maximum number of shared cells between two metacells
+  ident.group = 'orig.ident' # set the Idents of the metacell seurat object
+)
+
+interneurons = NormalizeMetacells(interneurons)
+
+```
+
+```{r}
+interneurons <- NormalizeMetacells(interneurons)
+interneurons = FindVariableFeatures(interneurons)
+interneurons <- ScaleMetacells(interneurons, features=VariableFeatures(interneurons))
+interneurons <- RunPCAMetacells(interneurons, features=VariableFeatures(interneurons))
+interneurons <- RunHarmonyMetacells(interneurons, group.by.vars='orig.ident')
+interneurons <- RunUMAPMetacells(interneurons, reduction='harmony', dims=1:15)
+
+
+#p1 <- DimPlotMetacells(interneurons, group.by='scvi_class') + umap_theme() + ggtitle("Cell Type")
+p2 <- DimPlotMetacells(interneurons, group.by='dataset') + umap_theme() + ggtitle("Sample")
+
+p2
+```
+
+
+
+## Constructing Metacells
+```{r}
+# construct metacells  in each group
+inter.exp_step3 = inter.exp_step3 %>% MetacellsByGroups(
+  group.by = c("scvi_class", "orig.ident"), # specify the columns in interneurons@meta.data to group by
+  k = 20, # nearest-neighbors parameter
+  reduction = "umap.scvi",
+  max_shared = 10, # maximum number of shared cells between two metacells
+  ident.group = "scvi_class", # set the Idents of the metacell seurat object
+)
+
+# normalize metacell expression matrix:
+inter.exp_step3 = NormalizeMetacells(inter.exp_step3)
+```
+
+## Process the Metacell Seurat Object
+Optional step, but may be useful since metacells are pseudobulk cells with way less sparsity and noise than the original nuclei
+```{r}
+metacell_objnew <- GetMetacellObject(inter.exp_step3)
+
+inter.exp_step3 <- NormalizeMetacells(inter.exp_step3)
+inter.exp_step3 <- ScaleMetacells(inter.exp_step3, features=VariableFeatures(inter.exp_step3))
+inter.exp_step3 <- RunPCAMetacells(inter.exp_step3, features=VariableFeatures(inter.exp_step3))
+inter.exp_step3 <- RunUMAPMetacells(inter.exp_step3, reduction='pca', dims=1:20)
+
+
+p1 <- DimPlotMetacells(inter.exp_step3, group.by='scvi_class') + umap_theme() + ggtitle("Cell Type")
+p2 <- DimPlotMetacells(inter.exp_step3, group.by='dataset') + umap_theme() + ggtitle("Sample")
+
+p2
+```
+
+
+## Co-expression network analysis
+```{r}
+interneurons = interneurons %>%  SetDatExpr(
+  group_name = unique(interneurons$scvi_class), # the name of the group of interest in the group.by column
+  group.by='scvi_class', # the metadata column containing the cell type info. This same column should have also been used in MetacellsByGroups
+  assay = 'RNA', # using RNA assay
+  slot = 'data' # using normalized data
+)
+```
+
+## Select soft-power threshold
+```{r}
+# Test different soft powers:
+interneurons <- TestSoftPowers(
+  interneurons,
+  networkType = 'signed' # you can also use "unsigned" or "signed hybrid"
+)
+```
+
+```{r}
+#interneurons = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/mgewgcna.rds")
+# plot the results:
+#plot_list <- PlotSoftPowers(interneurons)
+
+# assemble with patchwork
+wrap_plots(plot_list[[1]], ncol=2) + plot_annotation(
+  title = 'Morabito & Miyoshi',theme = theme(plot.title = element_text(hjust=0.5)))
+
+wrap_plots(plot_list[[2]], ncol=2) + plot_annotation(
+  title = 'Mathys',theme = theme(plot.title = element_text(hjust=0.5)))
+
+wrap_plots(plot_list[[3]], ncol=2) + plot_annotation(
+  title = 'Zhou',theme = theme(plot.title = element_text(hjust=0.5)))
+
+wrap_plots(plot_list[[4]], ncol=2) + plot_annotation(
+  title = 'Zhou',theme = theme(plot.title = element_text(hjust=0.5)))
+```
+```{r}
+PlotSoftPowers(interneurons)
+```
+
+## Construct co-expression network
+```{r}
+# construct co-expression network:
+interneurons <- ConstructNetwork(
+  interneurons, soft_power=4, #select the appropriate soft power determined in the previous code chunk
+  setDatExpr=FALSE,
+  tom_name = 'INTER', # name of the topoligical overlap matrix written to disk
+  overwrite_tom = T 
+)
+
+PlotDendrogram(interneurons, main='topo_1 hdWGCNA Dendrogram')
+```
+
+```{r}
+saveRDS(inter.exp_step3, "/wynton/group/paredes/Aunoy/interexpstep3.rds")
+```
+
+
+## Topological Overlap Matrix (TOM)
+```{r}
+TOM <- GetTOM(interneurons)
+```
+
+```{r}
+TOM
+```
+
+
+## Compute module eigengenes
+```{r}
+# compute all MEs in the full single-cell dataset
+interneurons <- ModuleEigengenes(
+ interneurons,
+ exclude_grey = T
+)
+```
+```{r}
+saveRDS(inter.exp_step3, "/wynton/group/paredes/Aunoy/interexpstep3.rds")
+```
+
+```{r}
+hMEs <- GetMEs(interneurons)
+```
+
+
+## Compute module connectivity
+```{r}
+# compute eigengene-based connectivity (kME):
+interneurons <- ModuleConnectivity(
+  interneurons,
+  group.by = 'scvi_fate', 
+  group_name = 'Interneurons'
+)
+
+# rename the modules
+inter.exp_step3 <- ResetModuleNames(
+  inter.exp_step3,
+  new_name = "INH-M"
+)
+
+# plot genes ranked by kME for each module
+p <- PlotKMEs(interneurons, ncol=7, text_size = 4)
+
+for(m in 1:2) {
+  wrap_plots(p[[m]])
+  ggsave(paste0("plots/module-connectivity_M", m, ".png"), width = 4, height = 4, scale = 1)
+}
+```
+```{r}
+PlotKMEs(interneurons, ncol=2, text_size = 4)
+```
+
+
+## Getting the module assignment table
+```{r}
+# get the module assignment table:
+modules <- GetModules(interneurons)
+
+# show the first rows:
+head(modules)
+
+# get hub genes
+hub_df <- GetHubGenes(interneurons, n_hubs = 200)
+
+#Exporting as an excel file:
+hub_df = hub_df %>% mutate(paper_module = module)
+hub_df = hub_df %>% arrange(paper_module, -kME) %>% select(paper_module, gene_name, kME)
+colnames(hub_df) = c("module", "gene", "kME")
+#write_xlsx(hub_df, path = "wgcna_modules_genes.xlsx")
+```
+
+Straight from Marcos
+
+```{r}
+inter.exp_cds = SeuratWrappers::as.cell_data_set(interneurons)
+
+# Transfer Seurat UMAP embeddings
+inter.exp_cds@int_colData@listData$reducedDims$UMAP <- interneurons@reductions$umap.scvi@cell.embeddings
+plot_cells(inter.exp_cds)
+
+inter.exp_cds = cluster_cells(reduction_method = "UMAP", cluster_method = "louvain", inter.exp_cds, k = 50)
+plot_cells(inter.exp_cds, color_cells_by = "cluster")
+plot_cells(inter.exp_cds, color_cells_by = "partition")
+
+rec.part <- c(rep(1, length(inter.exp_cds@colData@rownames)))
+rec.part[inter.exp_cds@clusters$UMAP$clusters == "43"] = 2
+names(rec.part) <- inter.exp_cds@colData@rownames
+rec.part <- as.factor(rec.part)
+
+inter.exp_cds@clusters$UMAP$partitions <- rec.part
+
+inter.exp_cds = learn_graph(inter.exp_cds, verbose = TRUE, close_loop = T, 
+                            learn_graph_control = list(nn.k = 10,
+                                                       minimal_branch_len = 10,
+                                                       euclidean_distance_ratio = 3, 
+                                                       geodesic_distance_ratio = 1))
+
+```
+
+```{r}
+plot_cells(cds,#inter.exp_cds,
+           color_cells_by = "cluster",
+           label_groups_by_cluster=FALSE,
+           label_leaves=F,
+           label_branch_points=F,
+           label_roots = F,
+           trajectory_graph_color = "cyan") + 
+  coord_fixed()
+```
+```{r}
+plot_cells(inter.exp_cds, color_cells_by = "dataset")
+```
+
+```{r}
+saveRDS(inter.exp_cds, "/wynton/group/paredes/Aunoy/FINAL_CDS_MONOCLE.rds")
+```
+
+```{r}
+inter.exp_cds <- order_cells(inter.exp_cds)
+
+```
+
+```{r}
+plot_cells(inter.exp_cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           label_roots = F,
+           trajectory_graph_segment_size = 0.7,
+           trajectory_graph_color = "cyan",
+           graph_label_size=1.5) + 
+  scale_color_viridis(name = "Pseudotime")+
+  coord_fixed() +
+  NoAxes() + 
+  theme(legend.position = "bottom")
+```
+### So what I want to do is to find transcription factors enriched
+### in specific clusters
+
+TF Genes
+
+
+```{r}
+### So four way venn diagram
+keys = c("Inh CGE", "Inh MGE", "Inh LGE", "Inh CGE/LGE")
+pairwise = combn(keys, 2)
+
+df_list = list()
+
+for(n in 1:ncol(pairwise)){
+  markers = FindMarkers(interneurons, group.by = "class", ident.1 = pairwise[1, n],
+                        ident.2 = pairwise[2, n])
+  df_list[[n]] = markers
+}
+```
+
+```{r}
+FeaturePlot(interneurons, reduction = "umap.scvi", features = "PROX1")
+```
+
+
+```{r}
+get_gene_list_from_DEG = function(df_list, key, pairings, threshold = 0.01){
+   relev_compars_a = which(key == pairings[1, ])
+   relev_compars_b = which(key == pairings[2, ])
+   
+   gene_list = c()
+   
+   for(n in relev_compars_a){
+     curr_df = df_list[[n]]
+     curr_df = curr_df %>% filter(avg_log2FC > 0) %>%
+       filter(p_val_adj < 0.05) %>% filter(pct.1 > threshold)
+     gene_list = c(gene_list, rownames(curr_df))
+   }
+   
+   for(n in relev_compars_b){
+     curr_df = df_list[[n]]
+     curr_df = curr_df %>% filter(avg_log2FC < 0) %>%
+       filter(p_val_adj < 0.05) %>% filter(pct.2 > threshold)
+     gene_list = c(gene_list, rownames(curr_df))
+   }
+   
+   gene_list = gene_list[!duplicated(gene_list)]
+   return(gene_list)
+}
+
+
+
+MGE_Only = get_gene_list_from_DEG(df_list, "Inh MGE", pairwise, threshold = 0.1)
+CGE_Only = get_gene_list_from_DEG(df_list, "Inh CGE", pairwise, threshold = 0.1)
+LGE_Only= get_gene_list_from_DEG(df_list, "Inh LGE", pairwise, threshold = 0.1)
+CGELGE_Only = get_gene_list_from_DEG(df_list, "Inh CGE/LGE", pairwise, threshold = 0.1)
+
+```
+
+```{r}
+tfs = read_table("~/TF_names_v_1.01.txt", col_names = FALSE)
+tfs = tfs$X1
+```
+```{r}
+MGE_TFs = MGE_Only[MGE_Only %in% tfs]
+CGE_TFs = CGE_Only[CGE_Only %in% tfs]
+LGE_TFs = LGE_Only[LGE_Only %in% tfs]
+CGELGE_TFs = CGELGE_Only[CGELGE_Only %in% tfs]
+```
+
+
+```{r}
+receptor_genes = read_tsv("~/receptor.tsv")
+```
+
+
+```{r}
+nmig_genes = read_table("~/nmig_genes.txt", col_names = FALSE)
+nmig_genes = toupper(nmig_genes$X2)
+nmig_genes = c(nmig_genes, "SEMA3A", "SEMA3B", "SEMA3C", "SEMA3D", "SEMA3E", "SEMA3F", "SEMA3G",
+                 "SEMA4A", "SEMA4B", "SEMA4C", "SEMA4D", "SEMA4F", "SEMA4G",
+                 "SEMA5A", "SEMA5B",
+                 "SEMA6A", "SEMA6B", "SEMA6C", "SEMA6D",
+                 "SEMA7A", 'NRP1', 'NRP2', 'PLXNA1', 'PLXNA2', 'PLXNA3', 'PLXNA4',
+               'PLXNB1', 'PLXNB2', 'PLXNB3', 'PLXNC1', 'PLXND1', 'SLIT1', 'SLIT2', 'ROBO1', 'ROBO2',
+               'ROBO3', "LRP8", "VLDLR", 'HGF','BDNF','NTF4')
+```
+
+```{r}
+MGE_Mig = MGE_Only[MGE_Only %in% nmig_genes]
+CGE_Mig = CGE_Only[CGE_Only %in% nmig_genes]
+LGE_Mig = LGE_Only[LGE_Only %in% nmig_genes]
+CGELGE_Mig = CGELGE_Only[CGELGE_Only %in% nmig_genes]
+```
+
+
+
+CGE_Only
+LGE_Only
+MGE_Only
+CGELGE_Only
+
+CGE_LGE
+CGE_MGE
+
+
+
+https://stackoverflow.com/questions/56551261/what-is-the-best-way-to-find-all-possible-intersections-of-multiple-sets
+```{r}
+sets = list(CGE_TFs, MGE_TFs, LGE_TFs, CGELGE_TFs)
+for (comboSize in 2:length(sets)){
+  combos = combn(1:length(sets), comboSize)
+  for(i in 1:ncol(combos)){
+    intersection = sets[[combos[1, i]]]
+    for(j in 2:nrow(combos)){
+      intersection = intersect(intersection, sets[[combos[j, i]]])
+    }
+    print(paste0("Intersection of ", keys[combos[, i]]))
+    #intersection = intersection[!intersection %in% sets[[(1:length(sets))[!(1:length(sets)) 
+                                                                       #   %in% combos[, 1]]]]]
+    intersection = intersection[!intersection %in% interneuron_genes$genes]
+    print(length(intersection))
+  }
+}
+
+```
+
+interneuron genes
+=  "DLX6-AS1" "MYT1L"    "SOX11"    "SOX4"     "ZNF704"   "ZEB2"     "SETBP1"   "PBX1"     "TCF4"     "NFIB"     "FOXN3"    "TCF12"    "GTF2I"  
+13
+
+
+
+
+
+402 genes
+
+```{r}
+cons = FindConservedMarkers(interneurons, grouping.var = "class", ident.1 = c("Inh CGE", "Inh MGE"))
+```
+
+
+```{r}
+human_arc = JoinLayers(human_arc)
+interneuron_markers = FindMarkers(human_arc, group.by = "class", ident.1 = c("Inh CGE", "Inh MGE", "Inh LGE", "Inh CGE/LGE"))
+remove(human_arc)
+```
+
+```{r}
+yap %>%
+  filter(avg_log2FC > 1) %>%
+  ggplot(aes(x = pct.1)) +
+  geom_histogram()
+```
+```{r}
+interneuron_markers$genes = rownames(interneuron_markers)
+interneuron_genes = interneuron_markers %>%
+  filter(avg_log2FC > 2) %>%
+  filter(pct.1 > 0.75) %>%
+  #filter(pct.2 < 0.50) %>%
+  dplyr::select(genes)
+```
+
+
+```{r}
+tfs = c(tfs, paste0(tfs, "-AS1"))
+int_tfs = interneuron_genes$genes[interneuron_genes$genes %in% tfs]
+all_genes = unique(c(CGE_TFs, MGE_TFs, LGE_TFs, CGELGE_TFs, int_tfs))
+
+gene_df = as.data.frame(matrix(data = 0, nrow = length(all_genes), ncol = 4))
+rownames(gene_df) = all_genes 
+colnames(gene_df) = keys
+gene_df[rownames(gene_df) %in% int_tfs, ]= c(1, 1, 1, 1)
+gene_df$`Inh CGE`[rownames(gene_df) %in% CGE_TFs] = 1
+gene_df$`Inh MGE`[rownames(gene_df) %in% MGE_TFs] = 1
+gene_df$`Inh LGE`[rownames(gene_df) %in% LGE_TFs] = 1
+gene_df$`Inh CGE/LGE`[rownames(gene_df) %in% CGELGE_TFs] = 1
+```
+
+
+```{r}
+cge_genes = rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+mge_genes = rownames(gene_df)[gene_df$`Inh MGE` == 1 & gene_df$`Inh CGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+lge_genes = rownames(gene_df)[gene_df$`Inh LGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh CGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+cgelge_genes = rownames(gene_df)[gene_df$`Inh CGE/LGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE` == 0]
+
+cm= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+cl= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 0]
+
+cz= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 1]
+
+ml= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 0]
+
+mz= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 1]
+
+lz= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 1]
+
+cml= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 0]
+
+cmz= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 1]
+
+clz= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 1]
+
+mlz= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 1]
+
+```
+
+
+```{r}
+all_genes[!all_genes %in% c(cge_genes, lge_genes, mge_genes, cgelge_genes,
+         cm, cl, cz, ml, mz, lz, cml, cmz, mlz, int_tfs, clz)]
+```
+
+
+```{r}
+length(c(cge_genes, lge_genes, mge_genes, cgelge_genes,
+         cm, cl, cz, ml, mz, lz, cml, cmz, mlz, int_tfs, clz))
+```
+
+CGE = 11
+MGE = 19
+LGE = 99
+ZGE = 60
+
+CM = 6
+CL = 4
+CZ = 26
+ML = 10
+MZ = 8
+LZ = 71
+
+CML = 16
+CMZ = 39
+CLZ = 25
+MLZ = 5
+
+all = 3
+
+```{r}
+#tfs = c(tfs, paste0(tfs, "-AS1"))
+#int_tfs = interneuron_genes$genes[interneuron_genes$genes %in% tfs]
+all_genes = unique(c(CGE_Mig, LGE_Mig, MGE_Mig, CGELGE_Mig))
+
+gene_df = as.data.frame(matrix(data = 0, nrow = length(all_genes), ncol = 4))
+rownames(gene_df) = all_genes 
+colnames(gene_df) = keys
+#gene_df[rownames(gene_df) %in% int_tfs, ]= c(1, 1, 1, 1)
+gene_df$`Inh CGE`[rownames(gene_df) %in% CGE_Mig] = 1
+gene_df$`Inh MGE`[rownames(gene_df) %in% MGE_Mig] = 1
+gene_df$`Inh LGE`[rownames(gene_df) %in% LGE_Mig] = 1
+gene_df$`Inh CGE/LGE`[rownames(gene_df) %in% CGELGE_Mig] = 1
+```
+
+
+```{r}
+cge_genes = rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+mge_genes = rownames(gene_df)[gene_df$`Inh MGE` == 1 & gene_df$`Inh CGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+lge_genes = rownames(gene_df)[gene_df$`Inh LGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh CGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+cgelge_genes = rownames(gene_df)[gene_df$`Inh CGE/LGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE` == 0]
+
+cm= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 0]
+
+cl= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 0]
+
+cz= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 1]
+
+ml= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 0]
+
+mz= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 1]
+
+lz= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 1]
+
+cml= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 0]
+
+cmz= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 0 & gene_df$`Inh CGE/LGE` == 1]
+
+clz= rownames(gene_df)[gene_df$`Inh CGE` == 1 & gene_df$`Inh MGE` == 0 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 1]
+
+mlz= rownames(gene_df)[gene_df$`Inh CGE` == 0 & gene_df$`Inh MGE` == 1 & 
+                    gene_df$`Inh LGE` == 1 & gene_df$`Inh CGE/LGE` == 1]
+
+```
+
+
+```{r}
+all_genes[!all_genes %in% c(cge_genes, lge_genes, mge_genes, cgelge_genes,
+         cm, cl, cz, ml, mz, lz, cml, cmz, mlz, int_tfs, clz)]
+```
+
+
+```{r}
+length(c(cge_genes, lge_genes, mge_genes, cgelge_genes,
+         cm, cl, cz, ml, mz, lz, cml, cmz, mlz, int_tfs, clz))
+```
+
+
+```{r}
+cds = as.cell_data_set(merged)
+```
+## Need to add partition, cluster, and umap embedding
+```{r}
+### 
+rec.part <- c(rep(1, length(cds@colData@rownames)))
+names(rec.part) <- cds@colData@rownames
+rec.part <- as.factor(rec.part)
+```
+
+```{r}
+cds@clusters$UMAP$partitions <- rec.part
+```
+
+```{r}
+list_cluster <- interneurons$scvi_clusters#Idents(human_arc[, Idents(human_arc) %in% groups])
+cds@clusters$UMAP$clusters <- list_cluster
+```
+
+```{r}
+#cds@int_colData@listData$reducedDims$UMAP
+cds@int_colData@listData$reducedDims$UMAP = cds@int_colData@listData$reducedDims$UMAP.SCVI
+```

@@ -1,0 +1,620 @@
+---
+title: "Fig2_WGCNA"
+output: html_notebook
+---
+
+# Details
+Aunoy Poddar
+July 16th, 2024
+This notebook will generate the figures used for Kim et al 2024.
+
+```{r setup}
+require(knitr)
+#opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r eval=FALSE}
+current_file <- rstudioapi::getActiveDocumentContext()$path
+output_file <- stringr::str_replace(current_file, '.Rmd', '.R')
+knitr::purl(current_file, output = output_file)
+file.edit(output_file)
+```
+
+# Import Libraries and declare file paths
+```{r}
+library(Seurat)
+library(tictoc)
+library(plyr)
+library(dplyr) 
+library(tidyr)
+library(ggplot2)
+library(cowplot)
+library(SeuratObject)
+library(SeuratWrappers)
+library(limma)
+library(pracma)
+library(monocle3)
+```
+
+# hdWGCNA
+This analysis followed the tutorial by Sam Morabito at https://smorabit.github.io/hdWGCNA/articles/basic_tutorial.html 
+
+## Loading Libraries
+```{r}
+
+# plotting and data science packages
+library(tidyverse)
+library(cowplot)
+library(patchwork)
+library(viridis)
+library(grDevices)
+library(writexl)
+
+# co-expression network analysis packages:
+library(WGCNA)
+library(hdWGCNA)
+
+# using the cowplot theme for ggplot
+theme_set(theme_cowplot())
+
+# set random seed for reproducibility
+set.seed(12345)
+
+#Variables to keep plots consistent:
+simple = NoAxes() + NoLegend()
+
+mysc = scale_color_viridis(option = "A")
+region.pal = c("#5EBFA2", "#F69663", "#731DD8",  "#FB7C7E")
+
+#Custom functions
+ggsave <- function(..., bg = "white") ggplot2::ggsave(..., bg = bg)
+
+#interneurons = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/merged_annot.rds")
+```
+
+```{r}
+#cds = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds.rds")
+cds = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds_special_mbl_50.rds")
+
+plot_cells(cds, color_cells_by = 'dataset', show_trajectory_graph = TRUE, group_label_size = 3.5,
+           label_roots = FALSE, label_leaves = FALSE, label_branch_points = FALSE) + NoAxes()
+```
+
+
+```{r}
+CGE_Cortical_Cells = choose_graph_segments(cds, return_list = T) 
+MGE_Cortical_Cells = choose_graph_segments(cds, return_list = T)
+LGE_D1_MSN = choose_graph_segments(cds, return_list = T)
+LGE_D1_MSN_PDYN = choose_graph_segments(cds, return_list = T)
+LGE_OB = choose_graph_segments(cds, return_list = T)
+MGE_Subpallial_Cholinergic = choose_graph_segments(cds, return_list = T)
+MGE_Striatal_Cells = choose_graph_segments(cds, return_list = T)
+```
+
+```{r}
+colData(cds)$CGE_CX_LIN = NA
+colData(cds)$MGE_CX_LIN = NA
+colData(cds)$LGE_MSN_LIN = NA
+colData(cds)$LGE_MSN2_LIN = NA
+colData(cds)$LGE_OB_LIN = NA
+colData(cds)$MGE_SC_LIN = NA
+colData(cds)$MGE_ST_LIN = NA
+
+#progenitors = rownames(colData(cds))[cds@clusters$UMAP$clusters %in% c(51, 50, 57, 6, 21, 17)]
+progenitors = rownames(colData(cds))[colData(cds)$shi_celltype == "progenitor" & cds@clusters$UMAP$clusters %in% 
+                                       c(51, 50, 57, 6, 21, 17)]
+
+colData(cds)$CGE_CX_LIN[rownames(colData(cds)) %in% c(CGE_Cortical_Cells$cells, progenitors)] = "CGE_CX_LIN"
+colData(cds)$MGE_CX_LIN[rownames(colData(cds)) %in% c(MGE_Cortical_Cells$cells, progenitors)] = "MGE_CX_LIN"
+colData(cds)$LGE_MSN_LIN[rownames(colData(cds)) %in% c(LGE_D1_MSN$cells, progenitors)] = "LGE_MSN_LIN"
+#colData(cds)$LGE_MSN2_LIN[rownames(colData(cds)) %in% LGE_D1_MSN_PDYN$cells] = "LGE_MSN2_LIN"
+colData(cds)$LGE_OB_LIN[rownames(colData(cds)) %in% c(LGE_OB$cells, progenitors)] = "LGE_OB_LIN"
+colData(cds)$MGE_SC_LIN[rownames(colData(cds)) %in% c(MGE_Subpallial_Cholinergic$cells, progenitors)] = "MGE_SC_LIN"
+colData(cds)$MGE_ST_LIN[rownames(colData(cds)) %in% c(MGE_Striatal_Cells$cells, progenitors)] = "MGE_ST_LIN"
+
+#colData(cds)$CGE_CX_LIN[rownames(colData(cds)) %in% CGE_Cortical_Cells$cells] = "CGE_CX_LIN"
+#colData(cds)$MGE_CX_LIN[rownames(colData(cds)) %in% MGE_Cortical_Cells$cells] = "MGE_CX_LIN"
+#colData(cds)$LGE_MSN_LIN[rownames(colData(cds)) %in% LGE_D1_MSN$cells] = "LGE_MSN_LIN"
+#colData(cds)$LGE_MSN2_LIN[rownames(colData(cds)) %in% LGE_D1_MSN_PDYN$cells] = "LGE_MSN2_LIN"
+#colData(cds)$LGE_OB_LIN[rownames(colData(cds)) %in% LGE_OB$cells] = "LGE_OB_LIN"
+#colData(cds)$MGE_SC_LIN[rownames(colData(cds)) %in% MGE_Subpallial_Cholinergic$cells] = "MGE_SC_LIN"
+#colData(cds)$MGE_ST_LIN[rownames(colData(cds)) %in% MGE_Striatal_Cells$cells] = "MGE_ST_LIN"
+```
+
+```{r}
+cds <- order_cells(cds)
+```
+
+```{r}
+library(streamgraph)
+```
+
+
+```{r}
+#my.cds_subset = cds[,!is.na(colData(cds)$MGE_CX_LIN)]
+ggplot(colData(cds) %>% as.data.frame() %>%
+         filter(!is.na(MGE_ST_LIN)), aes(pseudotime, fill = dataset)) + 
+    geom_histogram(bins = 10, position = "fill") + 
+    scale_fill_manual(values = c("#FF66AE", "#B88CC2", "#058E8E", "#C1F1AD")) +
+    scale_y_continuous(label = scales::percent,  expand = c(0,0), name = "Percentage of cells") +
+    scale_x_continuous(expand = c(0,0), name = "Pseudotime")  + 
+    #labs(title = "CGE-VIP/RELN Lineage") + 
+    theme(plot.title = element_text(family = "Arial", face = "bold", hjust = 0.5), legend.title = element_blank())
+```
+```{r fig.width = 10, fig.height = 4}
+library(ggstream)
+
+#interneurons <- BinPseudotime(interneurons, n_bins=c(5,50,100))
+lins = c("CGE_CX_LIN", "MGE_CX_LIN", "LGE_MSN_LIN", #"LGE_MSN2_LIN",
+"LGE_OB_LIN", "MGE_SC_LIN", "MGE_ST_LIN")
+
+ptsize = 0.4
+p = list()
+
+#colData(cds)$pseudotime_bins_50 = interneurons$pseudotime_bins_50
+
+
+for(i in 1:length(lins)) {
+  plotting_df = colData(cds) %>%
+  as.data.frame() %>%
+  filter(!is.na(!!sym(lins[i])))%>%
+  group_by(pseudotime_bins_50) %>%
+  select(dataset) %>% dplyr::count(dataset) %>% ungroup()
+
+  colnames(plotting_df) = c("pseudotime", "dataset", "proportion")
+  p[[i]] = plotting_df %>% 
+  ggplot(aes(x = as.numeric(pseudotime), y = proportion, label = dataset, color = dataset,
+             fill = factor(dataset, levels = c("arc", "shi",
+                                               "tsankova", "tsankova_ctx")))) +
+  geom_stream(type = "proportional") + theme_classic() + 
+      scale_fill_manual(values = c(arc = "#FF66AE", shi = "#B88CC2", 
+                                   tsankova = "#058E8E", tsankova_ctx = "#C1F1AD")) +
+      scale_colour_manual(values = paletteer::paletteer_d("dutchmasters::milkmaid") %>% colorspace::darken(.8)) +
+        scale_y_continuous(label = scales::percent,  expand = c(0,0), name = "Percentage of cells") +
+    scale_x_continuous(expand = c(0,0), name = "Pseudotime") +
+    xlab("pseudotime") + NoLegend() + 
+    ggtitle(lins[i]) 
+}
+
+cowplot::plot_grid(plotlist = p, ncol = 3)
+```
+
+
+```{r}
+interneurons$mge_lineage = !is.na(colData(cds)$MGE_CX_LIN)
+interneurons$cge_lineage = !is.na(colData(cds)$CGE_CX_LIN)
+
+mge = interneurons[, interneurons$mge_lineage]
+cge = interneurons[, interneurons$cge_lineage]
+
+saveRDS(mge, "/wynton/group/paredes/Aunoy/integrations_w_IPC/mgewgcna.rds")
+saveRDS(cge, "/wynton/group/paredes/Aunoy/integrations_w_IPC/cgewgcna.rds")
+```
+
+
+
+
+```{r fig.height = 6, fig.width = 12}
+umap.coords = reducedDim(cds, "UMAP")
+cells.meta = colData(cds)
+data = as.data.frame(cbind(umap.coords, cells.meta))
+
+lins = c("CGE_CX_LIN", "MGE_CX_LIN", "LGE_MSN_LIN", #"LGE_MSN2_LIN",
+"LGE_OB_LIN", "MGE_SC_LIN", "MGE_ST_LIN")
+
+ptsize = 0.4
+p = list()
+
+for(i in 1:length(lins)) {
+  p[[i]] <- ggplot(data, aes(umapscvi_1, umapscvi_2)) + 
+    geom_point(color = "grey90", size = ptsize) +
+    geom_point(data = data %>% filter(!is.na(!!sym(lins[i]))) %>% arrange(pseudotime), aes(col = pseudotime), size = ptsize) +
+    scale_color_viridis(option = "D", na.value = NA) + 
+    theme_void() + 
+    coord_fixed(ratio = 0.8) + 
+    labs(title = lins[i]) + 
+    NoLegend()
+}
+
+cowplot::plot_grid(plotlist = p, ncol = 3)
+```
+
+
+```{r fig.width = 16, fig.height = 5}
+plot_trajectory_features = function(cds, lineage, genes){
+  umap.coords = reducedDim(cds, "UMAP")
+  cells.meta = colData(cds)
+  expr = cds@assays@data$seurat_data[genes, ]
+  data = as.data.frame(cbind(umap.coords, cells.meta, t(expr)))
+  gene_names = colnames(data)[(ncol(data)-nrow(expr) + 1):ncol(data)]
+  myplots = list()
+  i = 1
+  pt.size = 0.01
+  for(gene in gene_names){
+    myplots[[i]] <- ggplot(data, aes(umapscvi_1, umapscvi_2)) + 
+    geom_point(color = "grey90", size = pt.size) +
+    geom_point(data = data  %>% filter(!is.na(!!sym(lineage))) %>% arrange(!!sym(gene)), 
+               aes(col = !!sym(gene)), size = pt.size, alpha = 0.8) +
+    scale_color_viridis(option = "D", na.value = NA) + 
+    theme_void() + 
+    coord_fixed(ratio = 0.8) + 
+    labs(title = gene) #+ 
+    #NoLegend()
+      i = i + 1
+  }
+  return(myplots)
+}
+# red :"#d62728"
+#plots = plot_trajectory_features(cds, lineage, c("NR2F2-AS1", "CNR1", "CALB2", "VIP"))
+#plots = plot_trajectory_features(cds, lins[2], c("NKX2-1", "LHX6", "MAF", "SST"))
+#plots = plot_trajectory_features(cds, lins[3], c("PENK", "CXCL12", "SIX3"))
+#plots = plot_trajectory_features(cds, lins[4], c("MEIS2", "FOXP2", "TSHZ2"))
+#plots = plot_trajectory_features(cds, lins[5], c("LHX8", "ZIC1", "ISL1"))
+#plots = plot_trajectory_features(cds, lins[6], c("CRABP1", "ST18", "EDIL3", "ETV1"))
+plots = plot_trajectory_features(cds, lins[4], c("MEIS2", "FOXP2", "TSHZ2", "SP8"))
+cowplot::plot_grid(plotlist = plots, ncol = 4)
+```
+
+
+
+```{r}
+meta = colData(cds)
+meta = meta[, c("age", "dataset", "pseudotime", "orig.ident", "scvi_class")]
+meta$age = "error"
+meta$age[grepl("GW09", meta$orig.ident)] = "9"
+meta$age[grepl("GW12", meta$orig.ident)] = "12"
+meta$age[grepl("GW13", meta$orig.ident)] = "13"
+meta$age[grepl("GW16", meta$orig.ident)] = "16"
+meta$age[grepl("GW18", meta$orig.ident)] = "18"
+meta$age[meta$orig.ident %in% c("9C", "9G")] = "17"
+meta$age[meta$orig.ident %in% c("24C", "24G")] = "18"
+meta$age[meta$orig.ident %in% c("26C", "26G")] = "19"
+meta$age[meta$orig.ident %in% c("11C", "11G")] = "20"
+meta$age[meta$orig.ident %in% c("56C", "56G")] = "21"
+meta$age[meta$orig.ident %in% c("30C", "30G")] = "22"
+meta$age[meta$orig.ident %in% c("63C", "63G")] = "23"
+meta$age[meta$orig.ident %in% c("34G", "34C")] = "21"
+meta$age[meta$orig.ident %in% c("23C", "23G")] = "24"
+meta$age[meta$orig.ident %in% c("62C", "62G")] = "25"
+meta$age[meta$orig.ident %in% c("64C", "64G")] = "26"
+meta$age[meta$orig.ident %in% c("3C", "3G")] = "26"
+meta$age[meta$orig.ident %in% c("60C", "60G")] = "33"
+meta$age[meta$orig.ident %in% c("10C", "10G")] = "33"
+meta$age[meta$orig.ident %in% c("6C", "6G")] = "38"
+meta$age[grepl("023_Arc", meta$orig.ident)] = "30"
+meta$age[grepl("003_", meta$orig.ident)] = "40"
+meta$age[grepl("2014", meta$orig.ident)] = "40"
+meta$age = as.numeric(meta$age)
+
+meta$normed_age = (meta$age - min(meta$age)) / (max(meta$age) - min(meta$age))
+```
+
+```{r}
+meta$position = -1
+
+meta$position[meta$dataset == "shi"] = 0
+meta$position[meta$dataset %in% c("arc", "tsankova")] = 0.5
+meta$position[meta$dataset == "tsankova_ctx"] = 1
+```
+
+```{r}
+meta %>%
+  ggplot(aes(x = pseudotime, y = factor(position))) + 
+    stat_density(
+    aes(fill = after_stat(density)),
+    geom = "raster",
+    position = "identity"
+   ) + theme_classic() + scale_fill_gradientn(colours = colorspace::heat_hcl(7))
+```
+
+```{r}
+meta %>%
+  as_tibble() %>%
+  dplyr::filter(grepl("LGE", scvi_class)) %>%
+  ggplot(aes(x = pseudotime, y = factor(age))) + 
+    stat_density(
+    aes(fill = after_stat(density)),
+    geom = "raster",
+    position = "identity"
+   ) + theme_classic() + scale_fill_gradientn(colours = colorspace::heat_hcl(7))
+```
+```{r}
+## For reproducibility
+set.seed(1234) 
+```
+
+```{r}
+colnames(colData(cds))
+```
+```{r}
+shi_bcodes = readxl::read_xlsx("~/shi_cells.xlsx", col_names = TRUE)
+colnames(shi_bcodes) = shi_bcodes[1, ]
+shi_bcodes = shi_bcodes[2:nrow(shi_bcodes), ]
+shi_bcodes
+```
+```{r}
+barcodes_set = colnames(cds)[colData(cds)$dataset == "shi"]
+barcodes_set = gsub("\\..*","", barcodes_set)
+
+ixs = match(barcodes_set, gsub("-.*","", shi_bcodes$Cells))
+
+colData(cds)$shi_celltype = NA
+colData(cds)$shi_celltype[colData(cds)$dataset == "shi"] = shi_bcodes$`Major types`[ixs]
+```
+
+
+```{r}
+plot_cells(cds, color_cells_by = 'cluster', show_trajectory_graph = TRUE, group_label_size = 3.5,
+           label_roots = FALSE, label_leaves = FALSE, label_branch_points = FALSE) + NoAxes()
+```
+
+```{r}
+meta = colData(cds) %>% as_tibble %>% select(c(scvi_clusters, shi_celltype))
+table(meta)
+```
+
+```{r}
+colData(cds)$progenitor_for_monocle = NA
+colData(cds)$progenitor_for_monocle[colData(cds)$scvi_clusters %in% c(6, 13, 30, 22)] = "CGE"
+colData(cds)$progenitor_for_monocle[colnames(cds) %in% CGE_Cortical_Cells$cells] = "CGE"
+colData(cds)$progenitor_for_monocle[colData(cds)$scvi_clusters %in% c("1", "5", "8",
+                                                                      "16", "17", "15")] = "CGE"
+plot_cells(cds, color_cells_by = 'progenitor_for_monocle', show_trajectory_graph = TRUE, group_label_size = 3.5,
+           label_roots = FALSE, label_leaves = FALSE, label_branch_points = FALSE) + NoAxes()
+```
+
+```{r}
+#colData(cds)$progenitor_for_monocle[colData(cds)$scvi_clusters %in% c(6, 13, 30, 22)] = "CGE"
+colData(cds)$progenitor_for_monocle[colnames(cds) %in% MGE_Cortical_Cells$cells] = "MGE"
+colData(cds)$progenitor_for_monocle[colData(cds)$scvi_clusters %in% c("10")] = "MGE"
+plot_cells(cds, color_cells_by = 'progenitor_for_monocle', show_trajectory_graph = TRUE, group_label_size = 3.5,
+           label_roots = FALSE, label_leaves = FALSE, label_branch_points = FALSE) + NoAxes()
+```
+```{r}
+genes = c("NR2F2-AS1", "LAMP5", "PV", "SST")
+  gene_short_name <- NA
+rowData(cds)$gene_name <- rownames(cds)
+rowData(cds)$gene_short_name <- rowData(cds)$gene_name
+
+plot_cells(cds,
+           genes=c("NR2F2-AS1", "LAMP5", "PV", "SST"))
+```
+
+```{r}
+interneurons = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/merged_annot.rds")
+interneurons <- FindClusters(interneurons, resolution = 1.5, cluster.name = "scvi_clusters")
+```
+
+```{r}
+FeaturePlot(interneurons, features = c("SATB2", "EOMES"),
+            reduction = "umap.scvi")
+```
+```{r}
+markers = FindMarkers(interneurons, group.by = "scvi_clusters", ident.1 = "10")
+```
+
+```{r}
+FeatureScatter(interneurons, feature1 = "SATB2", feature2 = "NEUROD2",
+               group.by = "dataset")
+```
+
+```{r}
+interneurons$SATB2_pos = "negative"
+interneurons$SATB2_pos[FetchData(interneurons, "SATB2") > 0 & FetchData(interneurons, "GAD1") == 0] = "positive"
+
+DimPlot(interneurons, group.by = "SATB2_pos",
+            reduction = "umap.scvi")
+```
+```{r}
+#shi = readRDS('/wynton/group/paredes/Aunoy/shinterneuron_scvi.rds')
+merged = readRDS("/wynton/group/paredes/Aunoy/integrations_reviews/shi_ivtro_sticr.rds")
+```
+
+```{r}
+shi_bcodes = readxl::read_xlsx("~/shi_cells.xlsx", col_names = TRUE)
+colnames(shi_bcodes) = shi_bcodes[1, ]
+shi_bcodes = shi_bcodes[2:nrow(shi_bcodes), ]
+shi_bcodes
+
+barcodes_set = colnames(merged)
+barcodes_set = gsub("\\..*","", barcodes_set)
+
+ixs = match(barcodes_set, gsub("-.*","", shi_bcodes$Cells))
+
+merged$annot = NA
+merged$annot = shi_bcodes$`Major types`[ixs]
+```
+
+```{r}
+shi = JoinLayers(shi)
+shi = FindNeighbors(shi, reduction = "integrated.scvi", dims = 1:30)
+shi = RunUMAP(shi,reduction = "integrated.scvi", dims = 1:30, reduction.name = "umap.scvi")
+
+DimPlot(shi, reduction = "umap.scvi", group.by = "annot", label = TRUE)
+```
+
+```{r}
+#merged = readRDS('/wynton/group/paredes/Aunoy/integrations_w_IPC/arc_shi_tsankova_tsankova_ctx.rds')
+merged = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/arc_shi.rds")
+```
+
+```{r}
+merged = JoinLayers(merged)
+merged = FindNeighbors(merged, reduction = "integrated.scvi", dims = 1:30)
+merged <- FindClusters(merged, resolution = 1.5, cluster.name = "scvi_clusters")
+merged = RunUMAP(merged,reduction = "integrated.scvi", dims = 1:30, reduction.name = "umap.scvi")
+
+DimPlot(merged, reduction = "umap.scvi", group.by = "dataset", label = FALSE, order = FALSE) + NoLegend() + NoAxes() + 
+  coord_fixed(ratio = 0.5)
+```
+
+```{r}
+arc_expr = FetchData(arc, vars = dorsal$genes)
+colMeans(arc_expr) %>% sort(decreasing = TRUE)
+```
+
+
+
+```{r}
+genes = rownames(merged)#VariableFeatures(merged)
+
+arc_classes = unique(merged$class)[!is.na(unique(merged$class))]
+shi_classes = unique(merged$annot)[!is.na(unique(merged$annot))]
+
+i = 1
+values = c()
+sigs = c()
+arcs = c()
+shis = c()
+
+for(arc_class in arc_classes){
+  for(shi_class in shi_classes){
+    arc_expr = merged[, merged$class == arc_class][["RNA"]]$data
+    shi_expr = merged[, merged$annot == shi_class][["RNA"]]$data
+    ctest = cor.test(rowMeans(arc_expr), rowMeans(shi_expr))
+    values = c(values, ctest$estimate)
+    sigs = c(sigs, ctest$p.value)
+    arcs = c(arcs, arc_class)
+    shis = c(shis, shi_class)
+  }
+}
+
+corr_df = as.data.frame(cbind(arcs, shis, values, sigs))
+colnames(corr_df) = c("Arc_Type", "Shi_type", "corr", "p-val")
+```
+
+```{r}
+corr_df$stat = ""
+corr_df$stat[as.numeric(corr_df$`p-val`)<0.01] = "*"
+corr_df$stat[as.numeric(corr_df$`p-val`)<0.001] = "**"
+```
+
+
+```{r fig.height = 2, fig.width = 3.5}
+corr_df %>%
+  filter(Arc_Type != "Inh IPC" & Shi_type != "progenitor") %>%
+  ggplot(aes(x = Arc_Type, y = Shi_type, fill = as.numeric(corr))) + 
+  geom_tile(color = "white") + 
+  geom_text(aes(label = stat)) + viridis::scale_fill_viridis() + theme_classic() + RotatedAxis()# + paletteer::scale_fill_paletteer_c("ggthemes::Orange-Blue Diverging") + theme_classic()
+```
+
+```{r}
+ventral = filtered %>% filter(avg_log2FC > 1) %>% select(genes) 
+dorsal = filtered %>% filter(avg_log2FC < 1) %>% select(genes) 
+
+arc = merged[, merged$dataset == "arc"]
+
+arc <- AddModuleScore(
+  object = arc,
+  features = list(c(ventral$genes),c(dorsal$genes)),
+  ctrl = 100,
+  name = 'ventral_vs_dorsal'
+)
+
+```
+
+```{r}
+Idents(arc) = "class"
+VlnPlot(arc,features = c("ventral_vs_dorsal1", "ventral_vs_dorsal2"), idents = c("Inh IPC"),
+        same.y.lims = TRUE) + ylim(0, 0.5)
+```
+```{r}
+
+```
+
+
+```{r}
+VlnPlot(merged, group.by = "annot", features = "DCX")
+```
+
+
+```{r}
+arc$Dorsal_Features110
+```
+
+
+```{r}
+#correlation_plot = function(se)
+  
+expr_shi = merged[, merged$dataset == "shi"][["RNA"]]$data
+expr_stcr = merged[, merged$dataset == "sticr_i"][["RNA"]]$data
+
+df = as.data.frame(cbind(rowMeans(expr_shi), rowMeans(expr_stcr), rownames(merged)))
+colnames(df) = c("Ventral", "Dorsal", "Genes")
+
+genes_filtered = filtered %>% arrange(desc(avg_log2FC)) %>% select(genes)
+genes_to_plot = genes_filtered$genes[c(1:10, (nrow(genes_filtered)-10):nrow(genes_filtered))]
+
+df %>% 
+ggplot(aes(x = Ventral, y = Dorsal, label = Genes)) +
+  geom_point() +
+  ggrepel::geom_label_repel(data = df %>% filter(Genes %in% genes_to_plot),
+    size = 5, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 1, max.iter = 1e5, # stop after 1 second, or after 100,000 iterations
+    box.padding = 0.3 # additional padding around each text label
+  ) + 
+  geom_smooth() + NoAxes()
+```
+
+```{r}
+dorsal_ventral_markers = FindMarkers(merged, group.by = "dataset", ident.1 = "shi", ident.2 = "sticr_i")
+
+filtered = dorsal_ventral_markers %>%
+  filter((pct.2 > 0.01 & avg_log2FC > 0 & pct.1 > 0.5) | (pct.1 > 0.01 & avg_log2FC < 0 & pct.2 > 0.5))
+```
+
+
+```{r}
+p = FeaturePlot(merged, reduction = "umap.scvi", features = c("DLX2", "MKI67", "GAD1", "DCX"), combine = FALSE) 
+for(i in 1:length(p)) {
+  p[[i]] <- p[[i]] + NoLegend() + NoAxes()
+}
+
+cowplot::plot_grid(plotlist = p)
+```
+
+```{r}
+merged$SATB2_pos = "negative"
+merged$SATB2_pos[FetchData(merged, "SATB2") > 0 & FetchData(merged, "GAD1") == 0 & grepl("tsankova", merged$dataset)] = "positive"
+
+merged = merged[, !(merged$SATB2_pos == "positive" & grepl("tsankova", merged$dataset))]
+
+DimPlot(merged, group.by = "SATB2_pos",
+            reduction = "umap.scvi")
+```
+```{r}
+meta = merged@meta.data
+meta = meta %>% select(c(SATB2_pos, dataset))
+table(meta)
+```
+
+```{r}
+list_cluster <- merged$scvi_clusters#Idents(human_arc[, Idents(human_arc) %in% groups])
+cds@clusters$UMAP$clusters <- list_cluster
+```
+
+```{r}
+#cds@int_colData@listData$reducedDims$UMAP
+cds@int_colData@listData$reducedDims$UMAP = cds@int_colData@listData$reducedDims$UMAP.SCVI
+```
+
+```{r}
+plot_cells(cds,
+           color_cells_by = 'cluster',
+           label_groups_by_cluster = FALSE,
+           group_label_size = 5) +
+theme(legend.position = "right")
+```
+```{r}
+saveRDS(cds, "/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds_special_mbl_50_final.rds")
+```
+
+```{r}
+cds = readRDS("/wynton/group/paredes/Aunoy/integrations_w_IPC/fig2_monocle_cds_special_mbl_50_final.rds")
+
+```
+
+
+
