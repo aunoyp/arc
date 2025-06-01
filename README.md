@@ -32,6 +32,9 @@ Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter
 ## Loading Image Data
 [Loading Image Data](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_all.Rmd)
 
+## Plotting Fxns
+[Helper Functions](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_functions.R)
+
 ## Nearest Neighbor Analysis
 [Adapated from the histoCAT neighborhood analysis interaction score.](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_nn.Rmd)
 
