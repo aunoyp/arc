@@ -18,19 +18,23 @@ Post-Cellbender corrected count matrices filtered to remove cells expressing hig
 Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter thresholds saved in <THIS DIRECTORY>).
 
 ## CellRank
-LINK TO CELLRANK
+[Figure 2G](https://github.com/aunoyp/arc/blob/main/snRNA_seq/fig2_cellrank.ipynb)
+[Figure 5B](https://github.com/aunoyp/arc/blob/final_version_edits/snRNA_seq/fig5_cellrank.ipynb)
 
 ## Monocle
-LINK TO MONOCLE
+[Monocle Graph Script](https://github.com/aunoyp/arc/blob/final_version_edits/snRNA_seq/fig2_graphtest.R)
 
 ## WGCNA
-LINK TO WGCNA
+[WGCNA Analysis](https://github.com/aunoyp/arc/blob/final_version_edits/snRNA_seq/wgcna.Rmd)
 
 # Spatial Transcriptomic Analysis of Piglet Arc Migratory Streams
 
 ## Loading Image Data
-LINK TO PREPROCESSING FXNS
+[Loading Image Data](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_all.Rmd)
+
+## Plotting Fxns
+[Helper Functions](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_functions.R)
 
 ## Nearest Neighbor Analysis
-Adapated from the histoCAT neighborhood analysis interaction score.
+[Adapated from the histoCAT neighborhood analysis interaction score.](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_nn.Rmd)
 
