@@ -1,0 +1,30 @@
+---
+title: "Figure_5_Revisions"
+output: html_notebook
+---
+
+
+```{r}
+## Load the final probabilities
+fate_df = read_csv("/wynton/group/paredes/Aunoy/f5_final_probs.csv")
+```
+
+```{r}
+fate_df
+```
+
+```{r}
+ixs = match(fate_df$barcode, colnames(cds))
+fate_df$initial = colData(cds)$class[ixs]
+```
+
+```{r}
+#library(ggpubr)
+fate_df %>% pivot_longer(!c(barcode, initial), names_to = "fate", values_to = "prob") %>%
+  filter(!is.na(initial)) %>%
+  ggviolin(x = "fate", y = "prob", width = 1, fill = "initial", alpha = 0.9) +
+  geom_jitter(size = 0.01, width = 0.03, alpha = 0.1, trim = TRUE, quantiles = TRUE) + facet_wrap(~initial) +
+  scale_fill_manual(values = c("#3c54cf", "#c43f69")) + 
+  RotatedAxis() + ylim(0.1, 1) + NoLegend() + theme(aspect.ratio = 1/2) + coord_flip()
+```
+
