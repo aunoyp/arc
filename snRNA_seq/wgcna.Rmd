@@ -16,8 +16,6 @@ Currently, these metrics will include:
 - mitochondrial content per cell
 - number of RNA counts per cell
 
-I sort of like David Wu's approach to do a PCA and just see how the cells arrange
-themselves as well.
 
 
 ```{r setup}
