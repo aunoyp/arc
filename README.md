@@ -15,7 +15,7 @@ Cortical GABAergic interneurons generated in the ventral developing brain travel
 ## Preprocessing Files
 FASTQ Files uploaded to GEO Browser (https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE255968). 
 Post-Cellbender corrected count matrices filtered to remove cells expressing high percentages of mitochondrial and ribosomal RNA and run through the DoubletFinder 2.0.3 R package to remove doublets.
-Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter thresholds generated from manual curation.
+Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter thresholds generated from manual curation. *If you are interested in accessing any R objects described in the paper, please send an email to aunoy.poddar@ucsf.edu!*
 
 ## CellRank
 [Figure 2G](https://github.com/aunoyp/arc/blob/main/snRNA_seq/fig2_cellrank.ipynb)
