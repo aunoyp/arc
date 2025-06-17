@@ -9,7 +9,7 @@ In large, gyrencephalic brains, the stem cell niche known as the subventricular 
 Cortical GABAergic interneurons generated in the ventral developing brain travel long distances to their final destinations. While there are examples of interneuron migration in the neonatal human brain, the extent of postnatal migration across species and how it contributes to cortical interneuron composition remains unknown. Here we demonstrate that neonatal gyrencephalic brains, including humans, nonhuman primates and piglets, harbor an elaborate subventricular zone, termed the Arc, due to its curved morphology and expanded neuroblast populations. The Arc is absent in lissencephalic marmoset and mouse brains. Transcriptomic and histological approaches revealed that Arc neurons are diverse interneurons from the medial and caudal ganglionic eminences that migrate into the frontal, cingulate and temporal cortex. Arc–cortical targets exhibit an increase in VIP+ neuronal density compared to other regions. Our findings reveal that the Arc is a developmental structure that supports the expansion of postnatal neuronal migration for cortical interneuron patterning in gyrencephalic brains.
 
 # Data Availability
-**If you are interested in accessing any R objects described in the paper, please send an email to aunoy.poddar@ucsf.edu, jaeyeon.kim@ucsf.edu, mercedes.paredes@ucsf.edu**
+**If you are interested in accessing any R objects described in the paper, please send an email to aunoy.poddar@ucsf.edu, jaeyeon.kim@ucsf.edu, and mercedes.paredes@ucsf.edu**
 
 
 # Single-Nucleus RNA Sequencing of Human Infant Arc
