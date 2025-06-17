@@ -16,6 +16,7 @@ file.edit(output_file)
 
 ## Import packages and functions
 ```{r}
+## Small comment, need Seurat version < 5.0.0 to process data
 library(Seurat)
 library(tictoc)
 library(ggplot2)
@@ -69,6 +70,8 @@ for (file_name in list.files(data_dir)){
   df_408 <- rbind(df_408, df_to_append)
 }
 ```
+
+### Rename input files for consistency
 ```{r}
 df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='_Cluster', replacement=''))
 df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
@@ -85,7 +88,6 @@ df_408 = df_408[df_408$IMAGE.NAME != 'TC_19', ]
 unique(df_408$IMAGE.NAME)
 ```
 
-
 ## Order the images
 ```{r}
 unique(df_408$IMAGE.NAME)
@@ -93,6 +95,8 @@ images_ordered = c('TC_20', 'TC_17', 'TC_16', 'TC_15', 'TC_14', 'TC_13', 'TC_12'
                    'TC_4', 'TC_3', 'TC_2', 'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10', 'CC_11', 'CC_12', 'CC_L2-3', 'CC_L2-2', 'CC_L2-1', 'CC_Cortical1', 'CC_Cortical2')
 ```
 
+### Use ordered images to load relative X/Y positions from larger tilescan 
+### (in order to plot them in relation to one another)
 ```{r}
 x_horz = 1:length(images_ordered) * 35
 y_horz = rep(0, length(images_ordered))
@@ -132,7 +136,7 @@ for(i in 1:length(images_ordered)){
 }
 ```
 
-## We have the coordinates for 408_TC and others
+## Create a Seurat Object for 408 
 ```{r}
 rownames(df_408) = 1:nrow(df_408)
 jy_408 = df_408 %>%
@@ -141,7 +145,7 @@ jy_408 = df_408 %>%
   CreateSeuratObject()
 ```
 
-## just set everything from below 1 in ratio to zero
+### High pass filter for normalized data
 ```{r}
 jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
 normed = GetAssayData(jy_408, slot = 'data')
@@ -149,6 +153,7 @@ normed[normed < 3] = 0
 jy_408 <- SetAssayData(jy_408, slot = 'data', normed)
 ```
 
+### Scale, dimensionality reduce, and visualize
 ```{r}
 jy_408 <- FindVariableFeatures(jy_408, selection.method = "vst")
 all.genes <- rownames(jy_408)
@@ -161,12 +166,15 @@ jy_408 <- RunUMAP(jy_408, dims = 1:30)
 DimPlot(jy_408,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
 ```
 
+### Create coordinate system XY for plotting images in relation to one another in stream
 ```{r}
 hcoords = df_408 %>% dplyr::select(c('X_horz', 'Y_horz')) %>% as.matrix()
 colnames(hcoords) <- c('pixel_1', 'pixel_2')
 
 jy_408[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_408))
 ```
+
+## Repeat processing with 164
 
 ### Merge both datasets and generate a metadata column that corresponds
 ### to the cell #
@@ -218,7 +226,6 @@ df_164[grepl('CC', df_164$area) & grepl('Cortical', df_164$IMAGE.NAME), 'IMAGE.N
 #df_164$IMAGE.NAME = toupper(df_164$IMAGE.NAME)
 unique(df_164$IMAGE.NAME)
 ```
-## Now we know that everything is equal to one another, we should load the variable
 
 ```{r}
 image_names = unique(df_164$IMAGE.NAME)
@@ -281,9 +288,6 @@ for(image_name in image_names){
 }
 ```
 
-
-
-## We have the coordinates for 408_TC and others
 ```{r}
 rownames(df_164) = 1:nrow(df_164)
 jy_164 = df_164 %>%
@@ -292,7 +296,6 @@ jy_164 = df_164 %>%
   CreateSeuratObject()
 ```
 
-## just set everything from below 1 in ratio to zero
 ```{r}
 jy_164 <- NormalizeData(jy_164, scale.factor = 1e5) ###
 normed = GetAssayData(jy_164, slot = 'data')
@@ -365,6 +368,7 @@ colnames(hcoords) <- c('pixel_1', 'pixel_2')
 jy_164[["H"]] <- CreateDimReducObject(embeddings = hcoords, key = "pixel_", assay = DefaultAssay(jy_164))
 ```
 
+## Synthesize all data into larger object, jy_all
 
 ```{r}
 jy_164<- RenameCells(jy_164, c(outer('164_', 1:ncol(jy_164), FUN=paste0)))
@@ -373,6 +377,7 @@ jy_408<- RenameCells(jy_408, c(outer('408_', 1:ncol(jy_408), FUN=paste0)))
 jy_408$area = df_408$area
 jy_all <- merge(jy_164, jy_408)
 ```
+
 ```{r}
 jy_all <- NormalizeData(jy_all, scale.factor = 1e5) ###
 normed = GetAssayData(jy_all, slot = 'data')
@@ -380,6 +385,7 @@ normed[normed < 3] = 0
 jy_all <- SetAssayData(jy_all, slot = 'data', normed)
 ```
 
+## Process, dim red, and visualize
 ```{r}
 jy_all <- FindVariableFeatures(jy_all, selection.method = "vst")
 all.genes <- rownames(jy_all)
