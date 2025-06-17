@@ -69,6 +69,8 @@ for (file_name in list.files(data_dir)){
   df_408 <- rbind(df_408, df_to_append)
 }
 ```
+
+### Rename input files for consistency
 ```{r}
 df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='_Cluster', replacement=''))
 df_408$IMAGE.NAME = unlist(lapply(df_408$IMAGE.NAME, gsub, pattern='[*]', replacement=''))
@@ -85,7 +87,6 @@ df_408 = df_408[df_408$IMAGE.NAME != 'TC_19', ]
 unique(df_408$IMAGE.NAME)
 ```
 
-
 ## Order the images
 ```{r}
 unique(df_408$IMAGE.NAME)
@@ -93,6 +94,8 @@ images_ordered = c('TC_20', 'TC_17', 'TC_16', 'TC_15', 'TC_14', 'TC_13', 'TC_12'
                    'TC_4', 'TC_3', 'TC_2', 'CC_4', 'CC_5', 'CC_6', 'CC_7', 'CC_8', 'CC_9', 'CC_10', 'CC_11', 'CC_12', 'CC_L2-3', 'CC_L2-2', 'CC_L2-1', 'CC_Cortical1', 'CC_Cortical2')
 ```
 
+### Use ordered images to load relative X/Y positions from larger tilescan 
+### (in order to plot them in relation to one another)
 ```{r}
 x_horz = 1:length(images_ordered) * 35
 y_horz = rep(0, length(images_ordered))
