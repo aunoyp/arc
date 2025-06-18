@@ -398,6 +398,7 @@ jy_all <- RunUMAP(jy_all, dims = 1:30)
 DimPlot(jy_all,  reduction = "umap", group.by = 'seurat_clusters') + NoAxes()
 ```
 
+## Plot dim plot with each physical area highlighted in umap space
 ```{r fig.height=8, fig.width=14}
 big_dimplot <- function(sobj, grep_pattern){
   dp = DimPlot(sobj, cells.highlight = list(imp = which(grepl(grep_pattern, sobj$area))))
@@ -431,6 +432,8 @@ clusters_408 = jy_all$RNA_snn_res.1.5[(ncol(jy_164)+1):ncol(jy_all)]
 jy_408$unified_clusters = clusters_408
 ```
 
+### Visualize the 408 image series spatially
+
 ```{r fig.height=8, fig.width=4}
 clusters = as.numeric(sort(unique(jy_408$unified_clusters)))
 plots <- lapply(1:length(clusters), function(i){
@@ -439,6 +442,8 @@ plots <- lapply(1:length(clusters), function(i){
 verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
 ggsave(plot = verts, filename = 'test_408_unified_vertical_cluster_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 5, height = 8, dpi = 150)
 ```
+
+### Visualize the 164 image series spatially
 ```{r fig.height=8, fig.width=5}
 clusters = as.numeric(sort(unique(jy_164$unified_clusters)))
 plots <- lapply(1:length(clusters), function(i){
@@ -448,6 +453,7 @@ verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
 ggsave(plot = verts, filename = 'test_164_unified_vertical_cluster_plots_size1_alpha1.png', path = file.path(output_dir_plot, '20220721_1'), width = 5, height = 8, dpi = 150)
 ```
 
+### Visualize marker genes
 ```{r fig.height=1, fig.width=8}
 genes = rownames(markers2)
 plots <- lapply(1:length(genes), function(i){
@@ -482,11 +488,14 @@ new.cluster.ids = c('TBR1+/LRP8+ MS to TC',
 
 ```
 
+### Assign labels
+
 ```{r}
 names(new.cluster.ids) <- levels(jy_all)
 jy_all <- RenameIdents(jy_all, new.cluster.ids)
 ```
 
+### Visualize cluster groups
 ```{r}
 library(ggrepel)
 plot_clusters_umap <- function(sobj, clustering, pt.size = 3, space = "umap")
@@ -648,6 +657,7 @@ scaled_values[, final_ox] %>%
           #  filename = file.path(file.path(output_dir_plot, '20220721_1'), 'ncol_20_sort_by_broad_type_gaps.png'))
 ```
 
+### Features umap plot
 ```{r}
 plot_features_umap <- function(sobj, gene, pt.size = 3, alpha = 0.8, space = "umap", color = '#CB2A55', flipped = FALSE)
 {
@@ -667,7 +677,7 @@ plot_features_umap <- function(sobj, gene, pt.size = 3, alpha = 0.8, space = "um
 }
 ```
 
-
+### Arrange the features into a grid
 ```{r fig.height=4, fig.width=10}
 genes = rownames(jy_immature)
 plots <- lapply(1:length(genes), function(i){
@@ -727,6 +737,7 @@ plots <- lapply(1:length(clusters), function(i){
 verts= plot_grid(plotlist = plots, label_size = 10, nrow = 1)
 ```
 
+### Visualization function to plot topographical maps based on real physical position of cells
 ```{r}
 plot_clusters_vertical_spatial <- function(sobj, cluster, clustering = NULL, anterior = FALSE, cluster_color =  '#CB2A55', pt.size = 1, space = "H", arc = TRUE)
 {
@@ -748,6 +759,7 @@ plot_clusters_vertical_spatial <- function(sobj, cluster, clustering = NULL, ant
 plot_clusters_vertical_spatial(jy_164, pt.size = 1, cluster = 3, clustering = 'RNA_snn_res.0.8')
 ```
 
+### Visualization function attempt to simply vertical spatial maps
 ```{r}
 plot_features_vertical_spatial_smoothed <- function(sobj, gene, pt.size = 0.5, space = "H", arc = TRUE)
 {
