@@ -493,54 +493,56 @@ saveRDS(clump_df, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annot
 toc()
 ```
 
+### Load precomputed clump data for 408
 ```{r}
 clump_df_408 <- readRDS(file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df_408.rds'))
 ```
-
-```{r}
-temporary
-```
+### Combine clump_df and clump_df_408
 ```{r}
 clump_df <- rbind(clump_df, clump_df_408)
 ```
-
+### Save combined clump_df
 ```{r}
 saveRDS(clump_df, file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df.rds'))
 ```
-
+### Load precomputed clump data for 164
 ```{r}
 clump_df_164 <- readRDS(file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df_164.rds'))
 ```
+### Combine clump_df_164 and clump_df
 ```{r}
 clump_df <- rbind(clump_df_164, clump_df)
 ```
 
 
-# START HERE
+# Can begin analysis HERE from final clump df
 ```{r}
 clump_df <- readRDS(file.path('/home/aunoy/st/arc_profiling/st_analysis/hand_annotated_data/clump', 'clump_df.rds'))
 ```
-
-
-
+### Scatterplot of area vs. perimeter for clumpsv
 ```{r}
 clump_df %>%
   ggplot(aes(x = Area, y = Perim.)) + geom_point()
 ```
+
+### PCA on clump features
 ```{r}
 clump_pca <- prcomp(clump_df[, 14:20], center = TRUE,scale. = TRUE)
-
 summary(clump_pca)
-
 ```
 
+### Visualize PCA
 ```{r}
 library(ggfortify)
 autoplot(clump_pca)
 ```
+
+### Color PCA by stream
 ```{r}
 autoplot(clump_pca, data = clump_df, colour = 'stream')
 ```
+
+### Assign stream types based on clump name
 ```{r}
 clump_df$stream = "wrong"
 clump_df$stream[which(grepl('408_TC', clump_df$...1))] = "408_TC"
@@ -554,6 +556,7 @@ clump_df$stream[which(grepl('408_L2', clump_df$...1))] = "PL2"
 clump_df$stream[which(grepl('164_CC_L2', clump_df$...1))] = "AL2"
 ```
 
+### Violin plot of area by stream
 ```{r}
 clump_df %>%
   ggplot(aes(x = stream, y = Area)) + geom_violin()
@@ -567,28 +570,31 @@ clump_df %>%
 asummary()
 ```
 
+### Summarize by stream
 ```{r}
 clump_df %>% group_by(stream) %>%
 summarize()
 ```
 
+### Violin plot area by stream (repeat)
 ```{r}
 clump_df %>%
   ggplot(aes(x = stream, y = Area)) + geom_violin()
 ```
 
+### Extract image name from clump name
 ```{r}
 clump_df$img <- str_split_fixed(clump_df$...1, "_Clump", 2)[, 1]
 ```
 
-
+### Area by stream scatter, point size by area
 ```{r fig.width = 10, fig.height = 10}
 clump_df %>%
   ggplot(aes(x = stream, y = Area, color = 'TBR1+ CGE')) + geom_point(size = clump_df$Area / 10e4, ) + RotatedAxis()
 ```
 
+### Boxplot of ncell (number of cells) per stream, point size by area
 ```{r}
-
 subset_df <- clump_df %>%
   filter(grepl('_', stream))
 
@@ -596,16 +602,20 @@ clump_df %>%
   filter(grepl('_', stream)) %>%
   ggplot(aes(x = stream, y = ncell)) + geom_boxplot() + geom_point(size = subset_df$Area / 10e4, ) + RotatedAxis() + ylab('# DCX cells in clump')
 ```
+
+### Boxplot of area by stream for clumps
 ```{r}
 clump_df %>%
   filter(grepl('_', stream)) %>%
   ggplot(aes(x = stream, y = Area)) + geom_boxplot() +  RotatedAxis()
 ```
 
+### UMAP on clump features
 ```{r}
 library(umap)
 clump_umap <- umap(clump_pca$x)
 ```
+
 ```{r}
 umap_cds <- as.data.frame(clump_umap$layout)
 colnames(umap_cds) <- c('umap1', 'umap2')
@@ -640,6 +650,7 @@ clump_df$VIP_pct <- clump_df$`VIP+GAD1+` / clump_df$ncell
 clump_df$CGE_pct <- clump_df$`CGE/LGE` / clump_df$ncell
 ```
 
+# Identify "weird" clusters based on UMAP2
 ```{r}
 weird_cluster <- clump_df %>%
   filter(umap2 > 10)
@@ -1127,7 +1138,7 @@ E(net)$edge.color <- "gray80"
 graph_attr(net, "layout") <- layout_with_fr(net)#net, center = 'CGE/LGE')
 plot(net, edge.arrow.size=.4, edge.curved=.5)
 ```
-### First maek a heatmap from images and cell types
+### First make a heatmap from images and cell types
 ```{r}
 jy_all$slice <- NA
 jy_all$slice[1:ncol(jy_164)] <- '164'
