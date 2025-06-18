@@ -39,5 +39,5 @@ Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter
 [Helper Functions](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_functions.R)
 
 ## Nearest Neighbor Analysis
-[Adapated from the histoCAT neighborhood analysis interaction score.](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_nn.Rmd)
+[Adapated from the histoCAT neighborhood analysis interaction score.](https://github.com/aunoyp/arc/blob/final_version_edits/hiplex/st_dist.Rmd)
 
