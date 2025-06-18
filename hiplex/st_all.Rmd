@@ -596,7 +596,7 @@ get_broad_type <- function(celltype){
 }
 ```
 
-## Create heatmap of data
+## Visualize with Heatmap
 ```{r fig.height=14, fig.width=10}
 # get the scaled data
 scaled_values = as.matrix(GetAssayData(jy_all, slot = "data"))

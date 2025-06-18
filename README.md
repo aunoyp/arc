@@ -1,19 +1,22 @@
 # An Expanded Subventricular Zone Supports Postnatal Cortical Interneuron Migration in Gyrencephalic Brains
 Repository hosting code used for transcriptomics analysis used in "An Expanded Subventricular Zone Supports Postnatal Cortical Interneuron Migration in Gyrencephalic Brains".
-Kim, JaeYeon<sup>1</sup>; Poddar, Aunoy<sup>1</sup>; Sandoval, Kadellyn; Chu, Julia; Horton, Emma; Cui, Di...; Paredes, Mercedes et al. (2025). _An Expanded Subventricular Zone Supports Postnatal Cortical Interneuron Migration in Gyrencephalic Brains._
+Kim, JaeYeon<sup>1</sup>; Poddar, Aunoy<sup>1</sup>;... Paredes, Mercedes(2025). _An expanded subventricular zone supports postnatal cortical interneuron migration in gyrencephalic brains_
 
 # Description
 In large, gyrencephalic brains, the stem cell niche known as the subventricular zone (SVZ) is expanded and arranged into previously unknown structures presumably to facilitate the expanded migration of inhibitory interneurons. To identify the cell types and relevant molecular mechanisms relevant for the development of inhibitory interneurons in the expanded SVZ, also known as the "Arc", we conducted single-nucleus RNA sequencing on GW30 and GW39 microdissected Arc regions from human brain samples. The code used to process and analyze this data, which is used to support the findings presented in Kim et al., are in this repository.
 
 # Abstract
-Cortical GABAergic interneurons generated in the ventral developing brain travel long distances to their final destinations. While there are examples of interneuron migration in the neonatal human brain, the extent of postnatal migration across species and how it contributes to cortical interneuron composition remains unknown. Here, we demonstrate that neonatal gyrencephalic brains, including humans and piglets, harbor an elaborate subventricular zone (SVZ), termed the Arc due to its curved morphology and expanded neuroblast populations. The Arc is absent in lissencephalic marmoset and mouse brains. Transcriptomic and histological approaches revealed that Arc neurons are diverse interneurons from the medial and caudal ganglionic eminences that migrate into the frontal, cingulate, and temporal cortex. Arc cortical targets in human and piglet brains exhibit an increase in VIP+ neuronal density compared to other regions. Our findings reveal that the Arc is a developmental structure that supports the expansion of postnatal neuronal migration for cortical interneuron patterning in gyrencephalic brains.
+Cortical GABAergic interneurons generated in the ventral developing brain travel long distances to their final destinations. While there are examples of interneuron migration in the neonatal human brain, the extent of postnatal migration across species and how it contributes to cortical interneuron composition remains unknown. Here we demonstrate that neonatal gyrencephalic brains, including humans, nonhuman primates and piglets, harbor an elaborate subventricular zone, termed the Arc, due to its curved morphology and expanded neuroblast populations. The Arc is absent in lissencephalic marmoset and mouse brains. Transcriptomic and histological approaches revealed that Arc neurons are diverse interneurons from the medial and caudal ganglionic eminences that migrate into the frontal, cingulate and temporal cortex. Arc–cortical targets exhibit an increase in VIP+ neuronal density compared to other regions. Our findings reveal that the Arc is a developmental structure that supports the expansion of postnatal neuronal migration for cortical interneuron patterning in gyrencephalic brains.
+
+# Data Availability
+**If you are interested in accessing any R objects described in the paper, please send an email to aunoy.poddar@ucsf.edu, jaeyeon.kim@ucsf.edu, and mercedes.paredes@ucsf.edu**
 
 
-# Single-Nucleus RNA Sequencing of Human Arc
+# Single-Nucleus RNA Sequencing of Human Infant Arc
 ![Figure_2B_Arc_UMAP_Representation](https://github.com/aunoyp/arc/blob/main/readme_figs/Fig_2B_UMAP.png?raw=true)
 
 ## Preprocessing Files
-FASTQ Files uploaded to GEO Browser (INSERT LINK). 
+FASTQ Files uploaded to GEO Browser (https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE255968). 
 Post-Cellbender corrected count matrices filtered to remove cells expressing high percentages of mitochondrial and ribosomal RNA and run through the DoubletFinder 2.0.3 R package to remove doublets.
 Preprocessing.Rmd loads matrices and filters for valid barcodes that pass filter thresholds generated from manual curation.
 

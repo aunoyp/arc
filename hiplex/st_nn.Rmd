@@ -48,7 +48,7 @@ output_dir_plot = '/home/aunoy/st/arc_profiling/st_analysis/results/plots'
 output_dir_tbls = '/home/aunoy/st/arc_profiling/st_analysis/results/tables'
 ```
 
-### plot the meta data real quick
+### Plot the meta data
 ```{r}
 meta_ntrscts = read.csv(file.path(clump_dir, 'meta', 'META_ntrsct.csv'), header = FALSE) %>%
   as_tibble()
@@ -71,7 +71,7 @@ jy_408 = df_408 %>%
 jy_408$image <- df_408$IMAGE.NAME
 ```
 
-## just set everything from below 1 in ratio to zero
+## High pass filter
 ```{r}
 jy_408 <- NormalizeData(jy_408, scale.factor = 1e5) ###
 normed = GetAssayData(jy_408, slot = 'data')
