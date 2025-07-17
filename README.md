@@ -1,6 +1,6 @@
 # An Expanded Subventricular Zone Supports Postnatal Cortical Interneuron Migration in Gyrencephalic Brains
 Repository hosting code used for transcriptomics analysis used in **An Expanded Subventricular Zone Supports Postnatal Cortical Interneuron Migration in Gyrencephalic Brains**
-Kim, JaeYeon<sup>1</sup>; Poddar, Aunoy<sup>1</sup>;... Paredes, Mercedes(2025), [Nature Neuroscience]((https://www.nature.com/articles/s41593-025-01987-2))
+Kim, JaeYeon<sup>1</sup>; Poddar, Aunoy<sup>1</sup>;... Paredes, Mercedes(2025), [Nature Neuroscience](https://www.nature.com/articles/s41593-025-01987-2)
 
 # Description
 In large, gyrencephalic brains, the stem cell niche known as the subventricular zone (SVZ) is expanded and arranged into previously unknown structures presumably to facilitate the expanded migration of inhibitory interneurons. To identify the cell types and relevant molecular mechanisms relevant for the development of inhibitory interneurons in the expanded SVZ, also known as the "Arc", we conducted single-nucleus RNA sequencing on GW30 and GW39 microdissected Arc regions from human brain samples. The code used to process and analyze this data, which is used to support the findings presented in Kim et al., are in this repository.
